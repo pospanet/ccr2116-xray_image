@@ -44,7 +44,8 @@ commit is `5ca6f4b7d4dc20a881d4330e498892697627ec0c`.
 The CA bundle comes from the digest-pinned Go builder image; the build does not
 install a moving CA package. Every runtime file is copied explicitly.
 
-The Xray upstream version and wrapper release stay separate:
+The Xray upstream version and wrapper release stay separate. `WRAPPER_RELEASE`
+in `.env` is the machine-validated authority for the wrapper version:
 `<image>:<xray-version>-<wrapper-release-without-v>-arm64`. Thus `v0.1` maps to
 `pospa/xray-core:26.7.28-0.1-arm64`; a wrapper-only `v0.2` would map to
 `26.7.28-0.2-arm64`. No floating tag, including `latest`, is built or published.
@@ -53,3 +54,11 @@ See [DEVOPS.md](DEVOPS.md) for local validation commands. CI builds and tests a
 locally loaded ARM64 candidate on pushes and pull requests without registry
 authentication. The tag-only release workflow tests one candidate before it
 logs in and publishes that same image.
+
+RouterOS hardware acceptance may use only the dedicated immutable RC path. A
+tag `rc-v0.1-<first-12-commit-hex>` triggers the RC workflow, which verifies the
+tag against both `WRAPPER_RELEASE` and the actual source SHA before building.
+It publishes only
+`pospa/xray-core:26.7.28-0.1-rc-<first-12-commit-hex>-arm64`, after the full
+actual-image suite passes, and refuses overwrite. This is not a final release,
+does not create a GitHub release/prerelease, and does not deploy the image.

@@ -9,9 +9,12 @@ continuing.
 
 - The owner approved the `PLAN.md` v0.1 architecture on 2026-08-15 and
   authorized implementation, local builds, tests, and image inspection.
-- Do not push an image, log in to Docker Hub, create a Git tag or release,
-  modify secrets, or deploy to any environment without a separate explicit
-  instruction.
+- The owner approved immutable RouterOS hardware-acceptance RC publication only
+  through `.github/workflows/release-candidate-xray.yaml` after all candidate
+  validations pass. This does not authorize direct/manual publication.
+- Do not directly push an image, log in to Docker Hub, create a Git tag or
+  GitHub release/prerelease, modify secrets, or deploy without a separate
+  explicit instruction. Final `v0.1` publication remains separately gated.
 
 ## Approved v0.1 baseline
 
@@ -96,13 +99,27 @@ continuing.
 
 - Ordinary pushes and pull requests validate but never authenticate to a
   registry and never publish.
-- Only Git tags matching the reviewed `v*` release convention may enter the
-  publishing workflow. Validate the tag strictly before login or push.
+- Final publication accepts only the separately reviewed `v*` release
+  convention. RC publication accepts only
+  `rc-v<major>.<minor>-<12-lowercase-hex>` through the dedicated RC workflow.
+- An RC tag's release must equal authoritative `WRAPPER_RELEASE` metadata, and
+  its 12-hex suffix must equal the first 12 characters of the actual commit
+  SHA. Fail closed before build or publication on any mismatch.
 - Never create or publish a `latest` tag or any floating compatibility tag.
 - The release image name is
   `<IMAGE_NAME>:<XRAY_VERSION>-<release-without-v>-arm64`.
+- The RC image name is
+  `<IMAGE_NAME>:<XRAY_VERSION>-<WRAPPER_RELEASE>-rc-<12hex>-arm64`.
 - Refuse to overwrite an existing release tag. Record the resulting manifest
   digest and deploy a versioned, immutable reference.
+- RC tags are immutable: refuse overwrite and fail closed if registry existence
+  cannot be determined. Build once, test the final image, retag the same image
+  ID, push only that RC tag, and verify its digest and `linux/arm64` platform.
+- RC registry login may occur only after the same source validation and full
+  actual-final-image integration suite used for a release candidate succeeds.
+- RC publication is not a final release and must not create a GitHub release or
+  prerelease, deploy, change secrets, publish another image, or promote a final
+  tag. Promotion is a later design decision after hardware acceptance.
 - CI and release tests must inspect and execute the actual final image. A
   Dockerfile text check is not proof of runtime contents or identity.
 - Test all failure paths without logging fixtures that model secrets. Keep

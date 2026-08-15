@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-test "$(wc -l < .env)" -eq 7
+test "$(wc -l < .env)" -eq 8
 grep -qx 'XRAY_VERSION=26.7.28' .env
 grep -qx 'XRAY_RELEASE_TAG=v26.7.28' .env
 grep -qx 'XRAY_UPSTREAM_COMMIT=5ca6f4b7d4dc20a881d4330e498892697627ec0c' .env
 grep -qx 'XRAY_ASSET_NAME=Xray-linux-arm64-v8a.zip' .env
 grep -qx 'XRAY_ASSET_SHA256=f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501' .env
 grep -qx 'IMAGE_NAME=pospa/xray-core' .env
+grep -qx 'WRAPPER_RELEASE=0.1' .env
 grep -qx 'PLATFORM=linux/arm64' .env
 grep -qx 'f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501  Xray-linux-arm64-v8a.zip' checksums/xray-v26.7.28-linux-arm64-v8a.sha256
 
@@ -34,7 +35,16 @@ if grep -REq 'uses:[[:space:]]+[^@]+@(v[0-9]+|main|master)([[:space:]#]|$)' .git
   echo 'workflow action is not pinned by full commit SHA' >&2
   exit 1
 fi
+if grep -REh '^[[:space:]]*-[[:space:]]+uses:' .github/workflows \
+  | grep -Ev 'uses:[[:space:]]+(\./[^[:space:]#]+|[^[:space:]#]+@[0-9a-f]{40})([[:space:]]+#.*)?$'; then
+  echo 'workflow action reference is not local or pinned by full commit SHA' >&2
+  exit 1
+fi
 if grep -Eq 'docker/login-action|docker (login|push)' .github/workflows/xray-ci.yaml; then
   echo 'ordinary CI contains registry authentication or publication' >&2
+  exit 1
+fi
+if grep -REqi '(^|[^[:alnum:]])latest([^[:alnum:]]|$)' .github/workflows; then
+  echo 'workflow contains a forbidden latest tag reference' >&2
   exit 1
 fi

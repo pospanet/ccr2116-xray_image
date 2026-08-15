@@ -13,3 +13,10 @@
   fail-closed release publication checks.
 - Updates the fully pinned checkout action to the Node.js 24-based v7.0.1
   release after direct verification of its official tag commit.
+- Adds a separately gated, tag-to-commit-bound RouterOS hardware-acceptance RC
+  workflow. It builds and tests one `linux/arm64` image, authenticates only
+  after the full suite, refuses overwrite, and publishes only an immutable
+  SHA-bearing RC tag with post-push digest and platform verification.
+- Makes `.env`'s `WRAPPER_RELEASE` the machine-validated wrapper-version
+  authority and documents that RC publication is neither final promotion nor
+  authorization for releases, deployments, other images, or secret changes.

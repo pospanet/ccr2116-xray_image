@@ -1,0 +1,116 @@
+name: release-candidate-xray
+
+on:
+  push:
+    tags:
+      - 'rc-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-candidate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate RC metadata, tag, and source commit
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_TYPE" == tag ]]
+          [[ "$GITHUB_REF_NAME" =~ ^rc-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-([0-9a-f]{12})$ ]]
+          tag_match=("${BASH_REMATCH[@]}")
+          release="${tag_match[1]}.${tag_match[2]}"
+          tag_sha="${tag_match[3]}"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${GITHUB_SHA:0:12}" == "$tag_sha" ]]
+          bash test/validate-metadata.sh
+          # validate-metadata.sh makes this fixed-format metadata safe to source.
+          source .env
+          [[ "$release" == "$WRAPPER_RELEASE" ]]
+          [[ "$PLATFORM" == linux/arm64 ]]
+          candidate="local/xray-release-candidate:${GITHUB_SHA}"
+          target="${IMAGE_NAME}:${XRAY_VERSION}-${WRAPPER_RELEASE}-rc-${tag_sha}-arm64"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+        with:
+          platforms: arm64
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        with:
+          version: v0.34.1
+          driver-opts: image=moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
+      - name: Build the RC candidate once
+        run: docker buildx build --platform linux/arm64 --provenance=false --sbom=false --load --tag '${{ steps.release.outputs.candidate }}' --cache-from type=gha --cache-to type=gha,mode=max .
+      - name: Validate Go source
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src golang:1.24.6-alpine3.22@sha256:c8c5f95d64aa79b6547f3b626eb84b16a7ce18a139e3e9ca19a8c078b85ba80d sh -ec '
+            test -z "$(gofmt -l cmd)"
+            go vet ./...
+            go test ./...
+          '
+      - name: Test the exact RC candidate
+        run: IMAGE='${{ steps.release.outputs.candidate }}' bash test/integration/run.sh
+      - name: Authenticate only after candidate tests pass
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Refuse overwrite and push the same tested image
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='${{ steps.release.outputs.target }}'
+          inspect_error=$(mktemp)
+          trap 'rm -f -- "$inspect_error"' EXIT
+          if docker manifest inspect "$target" >/dev/null 2>"$inspect_error"; then
+            echo 'refusing to overwrite an existing immutable RC tag' >&2
+            exit 1
+          fi
+          if ! grep -Eqi 'manifest unknown|no such manifest' "$inspect_error"; then
+            echo 'cannot safely determine whether the RC tag already exists' >&2
+            exit 1
+          fi
+          rm -f -- "$inspect_error"
+          trap - EXIT
+
+          tested_id=$(docker image inspect -f '{{.Id}}' '${{ steps.release.outputs.candidate }}')
+          docker tag '${{ steps.release.outputs.candidate }}' "$target"
+          tagged_id=$(docker image inspect -f '{{.Id}}' "$target")
+          [[ "$tested_id" == "$tagged_id" ]]
+          docker push "$target"
+
+          remote_manifest=$(docker manifest inspect "$target")
+          remote_config=$(jq -er '
+            select(type == "object")
+            | .config.digest
+            | select(test("^sha256:[0-9a-f]{64}$"))
+          ' <<<"$remote_manifest")
+          [[ "$remote_config" == "$tested_id" ]]
+
+          published=$(docker manifest inspect --verbose "$target")
+          digest=$(jq -er '
+            select(type == "object")
+            | .Descriptor
+            | select(.platform.os == "linux" and .platform.architecture == "arm64")
+            | .digest
+            | select(test("^sha256:[0-9a-f]{64}$"))
+          ' <<<"$published")
+          repository="${target%:*}"
+          local_digest=$(docker image inspect "$target" | jq -er --arg prefix "${repository}@" '
+            .[0].RepoDigests
+            | map(select(startswith($prefix)))
+            | if length == 1 then .[0] else error("unexpected RepoDigests") end
+            | split("@")[1]
+          ')
+          [[ "$local_digest" == "$digest" ]]
+          echo "published manifest digest: $digest"
+          docker buildx imagetools inspect "$target"

@@ -11,8 +11,11 @@ runtime release tag is `v0.1`, producing:
 pospa/xray-core:26.7.28-0.1-arm64
 ```
 
-Implementation and local verification are authorized. Publishing, Docker Hub
-login, tags, releases, secrets, and deployments are not authorized.
+Implementation and local verification are authorized. The only approved
+publication before final release is an immutable RouterOS hardware-acceptance
+RC through the dedicated tag-triggered workflow described below. Direct image
+publication, final publication, Docker Hub login outside that workflow, GitHub
+releases, secrets changes, and deployments are not authorized.
 
 ## Pinned upstream input
 
@@ -95,8 +98,40 @@ Fixtures use only unmistakably non-production example values.
 CI validates on `push` and `pull_request` and never authenticates or publishes.
 The tag-only release workflow builds one candidate, tests that exact candidate,
 then and only then logs in and pushes its immutable version tag; it never uses
-or publishes `latest`, and it never rebuilds after testing. A human must review
-the final candidate and perform RouterOS hardware acceptance before publishing.
+or publishes `latest`, and it never rebuilds after testing. Final publication
+remains gated on human review and RouterOS hardware acceptance; the RC path
+below exists to make that hardware acceptance possible first.
+
+### 2026-08-15 RouterOS hardware-acceptance RC decision
+
+The owner approved one narrowly scoped pre-release publication path. Only
+`.github/workflows/release-candidate-xray.yaml` may publish an RC, and only from
+a pushed tag exactly matching `rc-v<major>.<minor>-<12-lowercase-hex>`. The
+release component must equal the authoritative `WRAPPER_RELEASE` metadata, and
+the suffix must equal the first 12 characters of the actual 40-character source
+commit SHA. For wrapper release `0.1`, the resulting image identity is
+`pospa/xray-core:26.7.28-0.1-rc-<12hex>-arm64`.
+
+The RC workflow performs the same metadata, source, actual-image, identity,
+platform, exact-filesystem, exact-Xray-version, and negative-path checks as the
+release candidate before registry authentication. It builds exactly once,
+retags only the tested local image, verifies the image ID is unchanged, refuses
+an existing or indeterminate remote tag, pushes exactly one immutable RC tag,
+and verifies the published digest and `linux/arm64` platform. It creates no
+floating tag, GitHub release, or prerelease and performs no deployment or
+secret change.
+
+This RC is only an input to RouterOS hardware acceptance, not a final release.
+The authorization does not extend to the final `v0.1` release, other images,
+direct/manual publication, deployment, or secret changes. Final promotion and
+release semantics remain a separate owner decision after hardware acceptance.
+
+#### Change/rollback consequence
+
+Adding `WRAPPER_RELEASE` to `.env` makes existing repository metadata the
+single machine-validated wrapper-version authority used by the RC workflow.
+Rollback consists of removing the RC workflow and this metadata field; any RC
+already published remains immutable and must not be overwritten or repurposed.
 
 ### Change/rollback consequence
 
