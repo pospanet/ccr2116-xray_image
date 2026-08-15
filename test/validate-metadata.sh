@@ -17,7 +17,9 @@ grep -Fq "FROM --platform=\$BUILDPLATFORM alpine:3.22@sha256:14358309a308569c32b
 test "$(grep -Fc 'FROM scratch' Dockerfile)" -eq 1
 test "$(grep -Fc 'USER 65532:65532' Dockerfile)" -eq 1
 grep -Fq "test \"\$TARGETPLATFORM\" = \"linux/arm64\"" Dockerfile
-awk '/^FROM scratch$/ { final_stage=1; next } final_stage && /^COPY --from=/ { copies++ } END { exit copies == 6 ? 0 : 1 }' Dockerfile
+grep -Fq 'COPY --from=xray-verified --chmod=0555 /out/runtime-dirs/etc /etc' Dockerfile
+grep -Fq 'COPY --from=xray-verified --chmod=0555 /out/runtime-dirs/usr /usr' Dockerfile
+awk '/^FROM scratch$/ { final_stage=1; next } final_stage && /^COPY --from=/ { copies++ } END { exit copies == 8 ? 0 : 1 }' Dockerfile
 if grep -Eq 'apk add|apt-get|curl|wget' Dockerfile; then
   echo 'Dockerfile contains an unapproved network/package command' >&2
   exit 1

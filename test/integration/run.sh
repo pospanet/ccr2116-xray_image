@@ -38,6 +38,7 @@ expect_fail "Xray rejects invalid semantics" docker run --rm --platform "$platfo
 expect_fail "template mode rejects missing parameter" docker run --rm --platform "$platform" -v "$fixtures/template.json:/template.json:ro" -v "$fixtures/template-values-missing.json:/values.json:ro" "$IMAGE" test --mode template --template /template.json --values /values.json
 expect_fail "Xray rejects template type mismatch" docker run --rm --platform "$platform" -v "$fixtures/template.json:/template.json:ro" -v "$fixtures/template-values-wrong-type.json:/values.json:ro" "$IMAGE" test --mode template --template /template.json --values /values.json
 expect_ok "XHTTP stream-one fixture" docker run --rm --platform "$platform" -v "$fixtures/xhttp-stream-one.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
+expect_ok "runtime identity can read GeoIP and geosite assets" docker run --rm --platform "$platform" -v "$fixtures/geodata.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
 
 security_inspection=$(mktemp -d)
 trap 'rm -rf -- "$security_inspection"' EXIT
@@ -145,7 +146,10 @@ inspection=$(mktemp -d)
 trap 'docker rm -f "$created" >/dev/null 2>&1 || true; rm -rf -- "$inspection"' EXIT
 docker export -o "$inspection/rootfs.tar" "$created"
 mkdir "$inspection/rootfs"
-tar -xf "$inspection/rootfs.tar" -C "$inspection/rootfs"
+# Archive headers remain the authority for image modes and ownership. The
+# disposable extraction is made traversable for an unprivileged CI runner.
+tar --no-same-owner -xf "$inspection/rootfs.tar" -C "$inspection/rootfs"
+chmod -R u+rwX "$inspection/rootfs"
 actual=$(find "$inspection/rootfs" -type f -printf '%P\n' | sort)
 # Docker injects these files when it creates a container; they are not image-layer files.
 runtime_injected='^(\.dockerenv|dev/console|etc/hostname|etc/hosts|etc/resolv\.conf)$'
@@ -194,7 +198,7 @@ if find "$inspection/image-rootfs" -mindepth 1 ! -type f ! -type d -print -quit 
   exit 1
 fi
 while IFS= read -r directory; do
-  expected_mode=755
+  expected_mode=555
   if test "$directory" = tmp; then
     expected_mode=1777
   fi
@@ -212,8 +216,13 @@ if test "$tmp_archive_metadata" != 'drwxrwxrwt:0/0'; then
   echo "failed: /tmp archive mode/owner is $tmp_archive_metadata, expected drwxrwxrwt:0/0" >&2
   exit 1
 fi
-if find "$inspection/rootfs" -type l -print -quit | grep -q .; then
-  echo "failed: symlink found in final image" >&2
+runtime_symlinks=$(find "$inspection/rootfs" -type l -printf '%P\n' | sort)
+if test -n "$runtime_symlinks" && test "$runtime_symlinks" != etc/mtab; then
+  echo "failed: unexpected runtime symlink found" >&2
+  exit 1
+fi
+if test -L "$inspection/rootfs/etc/mtab" && test "$(readlink "$inspection/rootfs/etc/mtab")" != /proc/mounts; then
+  echo "failed: runtime /etc/mtab symlink has an unexpected target" >&2
   exit 1
 fi
 for required in etc/ssl/certs/ca-certificates.crt usr/local/share/xray/geoip.dat usr/local/share/xray/geosite.dat; do

@@ -14,11 +14,16 @@ FROM --platform=$BUILDPLATFORM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e96
 ADD --checksum=sha256:f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501 https://github.com/XTLS/Xray-core/releases/download/v26.7.28/Xray-linux-arm64-v8a.zip /tmp/xray.zip
 COPY --from=entry-build /out/xray-extract /usr/local/bin/xray-extract
 RUN mkdir -p /out/usr/local/bin /out/usr/local/share/xray /out/tmp \
+        /out/runtime-dirs/etc/ssl/certs \
+        /out/runtime-dirs/usr/local/bin \
+        /out/runtime-dirs/usr/local/share/xray \
     && /usr/local/bin/xray-extract /tmp/xray.zip /out/usr/local/share/xray \
     && mv /out/usr/local/share/xray/xray /out/usr/local/bin/xray \
     && chmod 1777 /out/tmp
 
 FROM scratch
+COPY --from=xray-verified --chmod=0555 /out/runtime-dirs/etc /etc
+COPY --from=xray-verified --chmod=0555 /out/runtime-dirs/usr /usr
 COPY --from=xray-verified --chmod=0555 /out/usr/local/bin/xray /usr/local/bin/xray
 COPY --from=entry-build --chmod=0555 /out/xray-entry /usr/local/bin/xray-entry
 COPY --from=entry-build --chmod=0444 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

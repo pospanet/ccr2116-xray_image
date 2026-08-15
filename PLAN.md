@@ -125,4 +125,7 @@ inputs and weaker fail-closed checks.
 
 BuildKit runs through the pinned `docker-container` driver in CI and in the
 documented local path. This is material for deterministic directory modes:
-`/tmp` is verified from the built image as mode `1777` before acceptance.
+the explicit runtime directory skeleton is mode `0555`, while `/tmp` is
+verified from the built image as mode `1777` before acceptance. This prevents
+file-level `COPY --chmod=0444` from leaving implicit parent directories without
+the execute bit required by numeric runtime identity `65532:65532`.
