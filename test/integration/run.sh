@@ -30,7 +30,7 @@ docker rm -f "$cid" >/dev/null
 trap - EXIT
 
 test "$(docker image inspect -f '{{.Config.User}}' "$IMAGE")" = "65532:65532"
-created=$(docker create "$IMAGE")
+created=$(docker create --platform "$platform" "$IMAGE")
 trap 'docker rm -f "$created" >/dev/null 2>&1 || true' EXIT
 actual=$(docker export "$created" | tar -tf - | sed 's#^\./##' | grep -v '/$' | sort)
 expected=$(printf '%s\n' etc/ssl/certs/ca-certificates.crt usr/local/bin/xray usr/local/bin/xray-entry usr/local/share/xray/geoip.dat usr/local/share/xray/geosite.dat | sort)
