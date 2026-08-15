@@ -103,3 +103,26 @@ the final candidate and perform RouterOS hardware acceptance before publishing.
 Changing Xray, the archive hash, geodata, builder base digest, wrapper, or
 workflow is a reviewable release input. Rollback is deployment of a previously
 tested immutable image reference; it does not mutate an existing tag.
+
+### 2026-08-15 implementation hardening
+
+Static review found that installing `ca-certificates` during the verifier stage
+made the CA bundle a moving build input, and copying the complete staging tree
+made the final allowlist less explicit. The implementation now copies the CA
+bundle from the already digest-pinned Go builder, uses a repository-owned
+static `archive/zip` extractor that can emit only the three allowlisted
+upstream files, and copies every final file individually. The extractor exists
+only in a builder stage and performs no network access. `/tmp` is created by an
+explicit `COPY --chmod=1777`.
+
+The same review pinned the CI Buildx and BuildKit versions, disabled runtime
+image provenance/SBOM manifests explicitly, removed test fixtures from the
+Docker build context, scrubbed base64 configuration from the executed process
+environment, and tightened JSON/source-file ambiguity checks. These changes do
+not alter the three configuration modes or deployment interface. Rollback to
+the earlier implementation is not recommended because it restores moving build
+inputs and weaker fail-closed checks.
+
+BuildKit runs through the pinned `docker-container` driver in CI and in the
+documented local path. This is material for deterministic directory modes:
+`/tmp` is verified from the built image as mode `1777` before acceptance.

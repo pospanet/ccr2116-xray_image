@@ -7,3 +7,6 @@
   configuration modes.
 - Adds verified official release-artifact acquisition, actual-image tests, and
   non-publishing CI plus guarded tag-only release automation.
+- Hardens deterministic CA sourcing, explicit final-file copying, `/tmp`
+  permissions, allowlisted archive extraction, strict JSON/source handling,
+  environment scrubbing, and fail-closed release publication checks.

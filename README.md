@@ -41,6 +41,8 @@ compilation. BuildKit verifies its committed SHA-256
 `f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501` before
 extraction; only Xray and the geo data are copied from it. The matching tag
 commit is `5ca6f4b7d4dc20a881d4330e498892697627ec0c`.
+The CA bundle comes from the digest-pinned Go builder image; the build does not
+install a moving CA package. Every runtime file is copied explicitly.
 
 The Xray upstream version and wrapper release stay separate:
 `<image>:<xray-version>-<wrapper-release-without-v>-arm64`. Thus `v0.1` maps to

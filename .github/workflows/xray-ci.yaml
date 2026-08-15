@@ -12,26 +12,26 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
         with:
           platforms: arm64
           image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        with:
+          version: v0.34.1
+          driver-opts: image=moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
       - name: Validate metadata and Go source
         run: |
           set -euo pipefail
-          grep -qx 'XRAY_VERSION=26.7.28' .env
-          grep -qx 'XRAY_RELEASE_TAG=v26.7.28' .env
-          grep -qx 'XRAY_UPSTREAM_COMMIT=5ca6f4b7d4dc20a881d4330e498892697627ec0c' .env
-          grep -qx 'XRAY_ASSET_NAME=Xray-linux-arm64-v8a.zip' .env
-          grep -qx 'XRAY_ASSET_SHA256=f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501' .env
-          grep -qx 'f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501  Xray-linux-arm64-v8a.zip' checksums/xray-v26.7.28-linux-arm64-v8a.sha256
+          bash test/validate-metadata.sh
           docker run --rm -v "$PWD:/src:ro" -w /src golang:1.24.6-alpine3.22@sha256:c8c5f95d64aa79b6547f3b626eb84b16a7ce18a139e3e9ca19a8c078b85ba80d sh -ec '
             test -z "$(gofmt -l cmd)"
             go vet ./...
             go test ./...
           '
       - name: Build exactly one local ARM64 candidate
-        run: docker buildx build --platform linux/arm64 --load --tag local/xray-ci:${{ github.sha }} --cache-from type=gha --cache-to type=gha,mode=max .
+        run: docker buildx build --platform linux/arm64 --provenance=false --sbom=false --load --tag local/xray-ci:${{ github.sha }} --cache-from type=gha --cache-to type=gha,mode=max .
       - name: Test the actual final image
         run: IMAGE=local/xray-ci:${{ github.sha }} bash test/integration/run.sh

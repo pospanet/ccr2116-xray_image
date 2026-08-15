@@ -7,6 +7,7 @@
 *.md
 examples
 testdata
+test
 
 # Local material must never enter the build context. The committed root .env
 # may be used as build metadata in a later implementation.

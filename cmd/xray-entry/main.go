@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 )
 
 var parameterName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
+var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type options struct {
 	mode, config, template, values, envVar string
@@ -89,6 +91,9 @@ func run(args []string) error {
 }
 
 func parseOptions(args []string) (options, error) {
+	if hasDuplicateOption(args) {
+		return options{}, errors.New("duplicate command option")
+	}
 	o := options{mode: "file", config: "/etc/xray/config.json", template: "/etc/xray/config.template.json", values: "/etc/xray/values.json", envVar: "XRAY_CONFIG_BASE64"}
 	fs := flag.NewFlagSet("xray-entry", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -103,10 +108,44 @@ func parseOptions(args []string) (options, error) {
 	if o.mode != "file" && o.mode != "template" && o.mode != "env-base64" {
 		return options{}, errors.New("mode must be file, template, or env-base64")
 	}
-	if o.envVar == "" {
-		return options{}, errors.New("environment variable name is required")
+	if !environmentName.MatchString(o.envVar) {
+		return options{}, errors.New("invalid environment variable name")
+	}
+	set := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	for name := range set {
+		if name == "mode" {
+			continue
+		}
+		allowed := (o.mode == "file" && name == "config") ||
+			(o.mode == "template" && (name == "template" || name == "values")) ||
+			(o.mode == "env-base64" && name == "env-var")
+		if !allowed {
+			return options{}, fmt.Errorf("option %q is not valid in %s mode", name, o.mode)
+		}
 	}
 	return o, nil
+}
+
+func hasDuplicateOption(args []string) bool {
+	known := map[string]bool{"mode": true, "config": true, "template": true, "values": true, "env-var": true}
+	seen := make(map[string]bool)
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		name := strings.TrimLeft(arg, "-")
+		if before, _, found := strings.Cut(name, "="); found {
+			name = before
+		}
+		if known[name] {
+			if seen[name] {
+				return true
+			}
+			seen[name] = true
+		}
+	}
+	return false
 }
 
 func forward(command string) error {
@@ -144,7 +183,7 @@ func validateStdin(f *os.File) error {
 func xrayEnvironment() []string {
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, entry := range os.Environ() {
-		if len(entry) >= len("XRAY_LOCATION_ASSET=") && entry[:len("XRAY_LOCATION_ASSET=")] == "XRAY_LOCATION_ASSET=" {
+		if strings.HasPrefix(entry, "XRAY_LOCATION_ASSET=") || strings.HasPrefix(entry, "XRAY_CONFIG_BASE64=") {
 			continue
 		}
 		env = append(env, entry)
@@ -181,6 +220,9 @@ func generatedConfig(o options) ([]byte, error) {
 		if !ok || encoded == "" {
 			return nil, fmt.Errorf("env-base64 mode environment variable %q is required", o.envVar)
 		}
+		if err := os.Unsetenv(o.envVar); err != nil {
+			return nil, errors.New("env-base64 mode could not clear source environment variable")
+		}
 		if len(encoded) > base64.StdEncoding.EncodedLen(maxConfigBytes) {
 			return nil, errors.New("env-base64 mode configuration exceeds size limit")
 		}
@@ -198,12 +240,32 @@ func generatedConfig(o options) ([]byte, error) {
 }
 
 func readJSONFile(path string) (any, error) {
-	if err := safeRegularFile(path); err != nil {
+	clean := filepath.Clean(path)
+	before, err := os.Lstat(clean)
+	if err != nil {
+		return nil, errors.New("cannot inspect source")
+	}
+	if err := validateSourceInfo(before); err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Clean(path))
+	f, err := os.Open(clean)
 	if err != nil {
 		return nil, errors.New("read failed")
+	}
+	defer f.Close()
+	after, err := f.Stat()
+	if err != nil || !os.SameFile(before, after) {
+		return nil, errors.New("source changed while opening")
+	}
+	if err := validateSourceInfo(after); err != nil {
+		return nil, err
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return nil, errors.New("read failed")
+	}
+	if len(b) > maxConfigBytes {
+		return nil, errors.New("source exceeds size limit")
 	}
 	return parseJSON(b)
 }
@@ -213,7 +275,11 @@ func safeRegularFile(path string) error {
 	if err != nil {
 		return errors.New("cannot inspect source")
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+	return validateSourceInfo(info)
+}
+
+func validateSourceInfo(info os.FileInfo) error {
+	if !info.Mode().IsRegular() {
 		return errors.New("source must be a regular file")
 	}
 	if info.Mode().Perm()&0o022 != 0 {
@@ -226,25 +292,48 @@ func safeRegularFile(path string) error {
 }
 
 func anonymousTemp(data []byte) (*os.File, error) {
-	f, err := os.CreateTemp("/tmp", "xray-entry-")
+	if len(data) == 0 || len(data) > maxConfigBytes {
+		return nil, errors.New("generated configuration is empty or exceeds size limit")
+	}
+	writer, err := os.CreateTemp("/tmp", "xray-entry-")
 	if err != nil {
 		return nil, errors.New("create generated configuration")
 	}
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
+	name := writer.Name()
+	linked := true
+	defer func() {
+		writer.Close()
+		if linked {
+			_ = os.Remove(name)
+		}
+	}()
+	if err := writer.Chmod(0o600); err != nil {
 		return nil, errors.New("restrict generated configuration permissions")
 	}
-	if err := os.Remove(f.Name()); err != nil {
-		f.Close()
-		return nil, errors.New("unlink generated configuration")
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
+	if _, err := writer.Write(data); err != nil {
 		return nil, errors.New("write generated configuration")
 	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		f.Close()
-		return nil, errors.New("rewind generated configuration")
+	writtenInfo, err := writer.Stat()
+	if err != nil || writtenInfo.Size() != int64(len(data)) {
+		return nil, errors.New("inspect generated configuration")
 	}
-	return f, nil
+	reader, err := os.Open(name)
+	if err != nil {
+		return nil, errors.New("open generated configuration for validation")
+	}
+	readInfo, err := reader.Stat()
+	if err != nil || !os.SameFile(writtenInfo, readInfo) || readInfo.Mode().Perm() != 0o600 {
+		reader.Close()
+		return nil, errors.New("generated configuration changed while opening")
+	}
+	if err := os.Remove(name); err != nil {
+		reader.Close()
+		return nil, errors.New("unlink generated configuration")
+	}
+	linked = false
+	if err := writer.Close(); err != nil {
+		reader.Close()
+		return nil, errors.New("close generated configuration writer")
+	}
+	return reader, nil
 }

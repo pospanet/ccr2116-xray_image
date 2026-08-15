@@ -24,6 +24,9 @@ func TestAnonymousTempIsUnlinkedAndPrivate(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode is %o, want 0600", info.Mode().Perm())
 	}
+	if _, err := f.Write([]byte("changed")); err == nil {
+		t.Fatal("generated configuration descriptor is writable")
+	}
 	b, err := io.ReadAll(f)
 	if err != nil {
 		t.Fatal(err)

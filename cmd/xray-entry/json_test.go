@@ -11,11 +11,20 @@ func TestParseJSONRejectsAmbiguity(t *testing.T) {
 		`{"a":1,"a":2}`,
 		`{"a":1} trailing`,
 		`{"a":`,
+		`{"a":"\uD800"}`,
+		`{"a":"\uDC00"}`,
+		string([]byte{'{', '"', 'a', '"', ':', '"', 0xff, '"', '}'}),
 	}
 	for _, input := range cases {
 		if _, err := parseJSON([]byte(input)); err == nil {
 			t.Fatalf("parseJSON(%q) unexpectedly succeeded", input)
 		}
+	}
+}
+
+func TestParseJSONAcceptsSurrogatePair(t *testing.T) {
+	if _, err := parseJSON([]byte(`{"value":"\uD83D\uDE00"}`)); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -56,6 +65,7 @@ func TestRenderTemplateFailsClosed(t *testing.T) {
 		`{"$xrayParam":"missing"}`,
 		`{"$xrayParam":"name","extra":true}`,
 		`{"$xrayParam":3}`,
+		`{"$xrayUnknown":"name"}`,
 	}
 	for _, input := range cases {
 		template, err := parseJSON([]byte(input))
@@ -66,5 +76,15 @@ func TestRenderTemplateFailsClosed(t *testing.T) {
 		if err == nil || (!strings.Contains(err.Error(), "missing") && !strings.Contains(err.Error(), "malformed")) {
 			t.Fatalf("expected closed failure for %s, got %v", input, err)
 		}
+	}
+}
+
+func TestRenderTemplateRejectsUnusedValues(t *testing.T) {
+	template, err := parseJSON([]byte(`{"value":{"$xrayParam":"used"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := renderTemplate(template, map[string]any{"used": true, "unused": false}); err == nil {
+		t.Fatal("unused template value unexpectedly succeeded")
 	}
 }

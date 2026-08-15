@@ -33,22 +33,69 @@ invalid_encoded=$(base64 -w0 "$fixtures/invalid-json.json")
 expect_fail "env-base64 rejects invalid JSON" docker run --rm --platform "$platform" -e "XRAY_CONFIG_BASE64=$invalid_encoded" "$IMAGE" test --mode env-base64
 expect_fail "template mode rejects missing sources" docker run --rm --platform "$platform" -e "XRAY_CONFIG_BASE64=$encoded" "$IMAGE" test --mode template --template /template.json --values /values.json
 expect_fail "file mode rejects invalid JSON" docker run --rm --platform "$platform" -v "$fixtures/invalid-json.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
+expect_fail "file mode rejects duplicate JSON keys" docker run --rm --platform "$platform" -v "$fixtures/duplicate-json.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
 expect_fail "Xray rejects invalid semantics" docker run --rm --platform "$platform" -v "$fixtures/invalid-semantic.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
 expect_fail "template mode rejects missing parameter" docker run --rm --platform "$platform" -v "$fixtures/template.json:/template.json:ro" -v "$fixtures/template-values-missing.json:/values.json:ro" "$IMAGE" test --mode template --template /template.json --values /values.json
+expect_fail "Xray rejects template type mismatch" docker run --rm --platform "$platform" -v "$fixtures/template.json:/template.json:ro" -v "$fixtures/template-values-wrong-type.json:/values.json:ro" "$IMAGE" test --mode template --template /template.json --values /values.json
 expect_ok "XHTTP stream-one fixture" docker run --rm --platform "$platform" -v "$fixtures/xhttp-stream-one.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
+
+security_inspection=$(mktemp -d)
+trap 'rm -rf -- "$security_inspection"' EXIT
+cp "$fixtures/valid.json" "$security_inspection/group-writable.json"
+chmod 0666 "$security_inspection/group-writable.json"
+expect_fail "file mode rejects unsafe permissions" docker run --rm --platform "$platform" -v "$security_inspection/group-writable.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
+canary=XRAY_ENTRY_CANARY_7f29c1e6
+canary_json=$(printf '{"inbounds":[{"protocol":"%s"}],"outbounds":[]}' "$canary")
+canary_encoded=$(printf '%s' "$canary_json" | base64 -w0)
+echo "check: validation errors do not reveal configuration values"
+if canary_output=$(docker run --rm --platform "$platform" -e "XRAY_CONFIG_BASE64=$canary_encoded" "$IMAGE" test --mode env-base64 2>&1); then
+  echo "failed: canary configuration unexpectedly validated" >&2
+  exit 1
+fi
+if printf '%s' "$canary_output" | grep -Fq "$canary"; then
+  echo "failed: configuration value appeared in validation output" >&2
+  exit 1
+fi
+rm -rf -- "$security_inspection"
+trap - EXIT
+
+# File mode must also validate and exec Xray as PID 1 with a stable read-only mount.
+echo "check: file-mode run lifecycle"
+file_cid=$(docker run -d --platform "$platform" -v "$fixtures/running.json:/config.json:ro" "$IMAGE" run --mode file --config /config.json)
+trap 'docker rm -f "$file_cid" >/dev/null 2>&1 || true' EXIT
+sleep 2
+if test "$(docker inspect -f '{{.State.Running}}' "$file_cid")" != true; then
+  echo "failed: file-mode runtime did not remain running" >&2
+  exit 1
+fi
+docker rm -f "$file_cid" >/dev/null
+trap - EXIT
 
 # A running container proves run execs the validated stdin configuration without a named config path.
 running_encoded=$(base64 -w0 "$fixtures/running.json")
 echo "check: generated-config stdin lifecycle"
 cid=$(docker run -d --platform "$platform" -e "XRAY_CONFIG_BASE64=$running_encoded" "$IMAGE" run --mode env-base64)
-trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+lifecycle_inspection=$(mktemp -d)
+trap 'docker rm -f "$cid" >/dev/null 2>&1 || true; rm -rf -- "$lifecycle_inspection"' EXIT
 sleep 2
 if test "$(docker inspect -f '{{.State.Running}}' "$cid")" != true; then
   echo "generated-configuration runtime did not remain running" >&2
   exit 1
 fi
+docker export -o "$lifecycle_inspection/rootfs.tar" "$cid"
+if tar -tf "$lifecycle_inspection/rootfs.tar" | grep -Eq '(^|/)tmp/xray-entry-'; then
+  echo "failed: named generated configuration remains in /tmp" >&2
+  exit 1
+fi
 docker rm -f "$cid" >/dev/null
+rm -rf -- "$lifecycle_inspection"
 trap - EXIT
+
+echo "check: image platform"
+if test "$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$IMAGE")" != "$platform"; then
+  echo "failed: image platform is not linux/arm64" >&2
+  exit 1
+fi
 
 echo "check: numeric runtime identity"
 if test "$(docker image inspect -f '{{.Config.User}}' "$IMAGE")" != "65532:65532"; then
@@ -56,7 +103,23 @@ if test "$(docker image inspect -f '{{.Config.User}}' "$IMAGE")" != "65532:65532
   exit 1
 fi
 
+echo "check: generic image metadata"
+if test "$(docker image inspect -f '{{json .Config.Entrypoint}}' "$IMAGE")" != '["/usr/local/bin/xray-entry"]' ||
+   test "$(docker image inspect -f '{{json .Config.Cmd}}' "$IMAGE")" != '["run"]' ||
+   test "$(docker image inspect -f '{{json .Config.Env}}' "$IMAGE")" != 'null' ||
+   test "$(docker image inspect -f '{{json .Config.ExposedPorts}}' "$IMAGE")" != 'null' ||
+   test "$(docker image inspect -f '{{json .Config.Volumes}}' "$IMAGE")" != 'null' ||
+   test "$(docker image inspect -f '{{json .Config.Healthcheck}}' "$IMAGE")" != 'null' ||
+   test "$(docker image inspect -f '{{json .Config.Shell}}' "$IMAGE")" != 'null'; then
+  echo "failed: image metadata contains an unexpected runtime setting" >&2
+  exit 1
+fi
+
 echo "check: exact final filesystem"
+if ! command -v jq >/dev/null 2>&1; then
+  echo "failed: jq is required for image-layer inspection" >&2
+  exit 1
+fi
 created=$(docker create --platform "$platform" "$IMAGE")
 trap 'docker rm -f "$created" >/dev/null 2>&1 || true' EXIT
 inspection=$(mktemp -d)
@@ -70,16 +133,92 @@ runtime_injected='^(\.dockerenv|dev/console|etc/hostname|etc/hosts|etc/resolv\.c
 image_files=$(printf '%s\n' "$actual" | grep -Ev "$runtime_injected" || true)
 expected=$(printf '%s\n' etc/ssl/certs/ca-certificates.crt usr/local/bin/xray usr/local/bin/xray-entry usr/local/share/xray/geoip.dat usr/local/share/xray/geosite.dat | sort)
 if test "$image_files" != "$expected"; then
-  echo "failed: unexpected regular-file set in final image" >&2
+  echo "failed: unexpected regular-file set in runtime container" >&2
   diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$image_files") >&2 || true
   exit 1
 fi
-if test ! -d "$inspection/rootfs/tmp" || test "$(stat -c '%a' "$inspection/rootfs/tmp")" != 1777; then
-  echo "failed: /tmp is absent or is not mode 1777" >&2
+
+docker image save -o "$inspection/image.tar" "$IMAGE"
+mkdir "$inspection/image-archive" "$inspection/image-rootfs"
+tar -xf "$inspection/image.tar" -C "$inspection/image-archive"
+mapfile -t layers < <(jq -r '.[0].Layers[]' "$inspection/image-archive/manifest.json")
+if test "${#layers[@]}" -eq 0; then
+  echo "failed: saved image has no filesystem layers" >&2
+  exit 1
+fi
+for layer in "${layers[@]}"; do
+  if tar -tf "$inspection/image-archive/$layer" | grep -Eq '(^|/)\.wh\.'; then
+    echo "failed: whiteout found in final scratch-image layers" >&2
+    exit 1
+  fi
+  if tar --numeric-owner -tvf "$inspection/image-archive/$layer" | awk '$2 != "0/0" { found=1 } END { exit found ? 0 : 1 }'; then
+    echo "failed: non-root-owned entry found in final image layers" >&2
+    exit 1
+  fi
+  tar --no-same-owner -xf "$inspection/image-archive/$layer" -C "$inspection/image-rootfs"
+done
+layer_files=$(find "$inspection/image-rootfs" -type f -printf '%P\n' | sort)
+if test "$layer_files" != "$expected"; then
+  echo "failed: unexpected regular-file set in final image layers" >&2
+  diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$layer_files") >&2 || true
+  exit 1
+fi
+expected_directories=$(printf '%s\n' etc etc/ssl etc/ssl/certs tmp usr usr/local usr/local/bin usr/local/share usr/local/share/xray | sort)
+layer_directories=$(find "$inspection/image-rootfs" -mindepth 1 -type d -printf '%P\n' | sort)
+if test "$layer_directories" != "$expected_directories"; then
+  echo "failed: unexpected directory set in final image layers" >&2
+  diff -u <(printf '%s\n' "$expected_directories") <(printf '%s\n' "$layer_directories") >&2 || true
+  exit 1
+fi
+if find "$inspection/image-rootfs" -mindepth 1 ! -type f ! -type d -print -quit | grep -q .; then
+  echo "failed: non-file, non-directory object found in final image layers" >&2
+  exit 1
+fi
+while IFS= read -r directory; do
+  expected_mode=755
+  if test "$directory" = tmp; then
+    expected_mode=1777
+  fi
+  if test "$(stat -c '%a' "$inspection/image-rootfs/$directory")" != "$expected_mode"; then
+    echo "failed: directory $directory does not have mode $expected_mode" >&2
+    exit 1
+  fi
+done <<<"$layer_directories"
+if test ! -d "$inspection/rootfs/tmp"; then
+  echo "failed: /tmp is absent" >&2
+  exit 1
+fi
+tmp_archive_metadata=$(tar --numeric-owner -tvf "$inspection/rootfs.tar" | awk '$NF == "tmp" || $NF == "tmp/" || $NF == "./tmp" || $NF == "./tmp/" {print $1 ":" $2}')
+if test "$tmp_archive_metadata" != 'drwxrwxrwt:0/0'; then
+  echo "failed: /tmp archive mode/owner is $tmp_archive_metadata, expected drwxrwxrwt:0/0" >&2
   exit 1
 fi
 if find "$inspection/rootfs" -type l -print -quit | grep -q .; then
   echo "failed: symlink found in final image" >&2
+  exit 1
+fi
+for required in etc/ssl/certs/ca-certificates.crt usr/local/share/xray/geoip.dat usr/local/share/xray/geosite.dat; do
+  if test ! -s "$inspection/rootfs/$required"; then
+    echo "failed: required runtime data file $required is empty" >&2
+    exit 1
+  fi
+done
+for executable in usr/local/bin/xray usr/local/bin/xray-entry; do
+  archive_metadata=$(tar --numeric-owner -tvf "$inspection/rootfs.tar" | awk -v path="$executable" '$NF == path || $NF == "./" path {print $1 ":" $2}')
+  if test "$archive_metadata" != '-r-xr-xr-x:0/0'; then
+    echo "failed: $executable archive mode/owner is not 0555:0:0" >&2
+    exit 1
+  fi
+done
+for data_file in etc/ssl/certs/ca-certificates.crt usr/local/share/xray/geoip.dat usr/local/share/xray/geosite.dat; do
+  archive_metadata=$(tar --numeric-owner -tvf "$inspection/rootfs.tar" | awk -v path="$data_file" '$NF == path || $NF == "./" path {print $1 ":" $2}')
+  if test "$archive_metadata" != '-r--r--r--:0/0'; then
+    echo "failed: $data_file archive mode/owner is not 0444:0:0" >&2
+    exit 1
+  fi
+done
+if grep -R -a -Fq "$canary" "$inspection/rootfs" "$inspection/image-rootfs"; then
+  echo "failed: runtime canary found in final filesystem" >&2
   exit 1
 fi
 for forbidden in bin/sh bin/bash busybox curl wget ssh apk apt apt-get dpkg yum dnf; do
@@ -88,12 +227,33 @@ for forbidden in bin/sh bin/bash busybox curl wget ssh apk apt apt-get dpkg yum 
     exit 1
   fi
 done
+if ! command -v readelf >/dev/null 2>&1; then
+  echo "failed: readelf is required for static ELF inspection" >&2
+  exit 1
+fi
+for binary in usr/local/bin/xray usr/local/bin/xray-entry; do
+  if ! readelf -h "$inspection/rootfs/$binary" >/dev/null 2>&1; then
+    echo "failed: $binary is not a readable ELF executable" >&2
+    exit 1
+  fi
+  if readelf -lW "$inspection/rootfs/$binary" | grep -q ' INTERP '; then
+    echo "failed: $binary requires a dynamic loader" >&2
+    exit 1
+  fi
+done
 docker rm -f "$created" >/dev/null
 rm -rf -- "$inspection"
 trap - EXIT
 echo "check: exact Xray version"
-if ! docker run --rm --platform "$platform" --entrypoint /usr/local/bin/xray "$IMAGE" version | grep -E '^Xray 26\.7\.28 '; then
+if ! docker run --rm --platform "$platform" "$IMAGE" version | grep -E '^Xray 26\.7\.28 '; then
   echo "failed: exact Xray version check" >&2
   exit 1
 fi
+echo "check: UUID command"
+generated_uuid=$(docker run --rm --platform "$platform" "$IMAGE" uuid)
+if ! printf '%s\n' "$generated_uuid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+  echo "failed: UUID command output is invalid" >&2
+  exit 1
+fi
+echo "image size bytes: $(docker image inspect -f '{{.Size}}' "$IMAGE")"
 echo "integration and final-filesystem checks passed"

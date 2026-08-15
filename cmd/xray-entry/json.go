@@ -6,11 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode/utf8"
 )
 
 func parseJSON(data []byte) (any, error) {
 	if len(data) == 0 || len(data) > maxConfigBytes {
 		return nil, errors.New("JSON input is empty or exceeds size limit")
+	}
+	if !utf8.Valid(data) {
+		return nil, errors.New("JSON input is not valid UTF-8")
+	}
+	if !validUnicodeEscapes(data) {
+		return nil, errors.New("JSON input contains an invalid Unicode escape")
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.UseNumber()
@@ -79,14 +87,87 @@ func parseJSONValue(d *json.Decoder, depth int) (any, error) {
 		}
 	case string, bool, nil:
 		return value, nil
-	case json.Number, float64:
+	case json.Number:
 		return value, nil
 	default:
 		return nil, errors.New("unexpected JSON value")
 	}
 }
 
+func validUnicodeEscapes(data []byte) bool {
+	inString := false
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString || i+1 >= len(data) {
+				continue
+			}
+			i++
+			if data[i] != 'u' || i+4 >= len(data) {
+				continue
+			}
+			value, ok := hexQuad(data[i+1 : i+5])
+			if !ok {
+				continue
+			}
+			i += 4
+			if value >= 0xDC00 && value <= 0xDFFF {
+				return false
+			}
+			if value < 0xD800 || value > 0xDBFF {
+				continue
+			}
+			if i+6 >= len(data) || data[i+1] != '\\' || data[i+2] != 'u' {
+				return false
+			}
+			low, ok := hexQuad(data[i+3 : i+7])
+			if !ok || low < 0xDC00 || low > 0xDFFF {
+				return false
+			}
+			i += 6
+		}
+	}
+	return true
+}
+
+func hexQuad(data []byte) (uint16, bool) {
+	if len(data) != 4 {
+		return 0, false
+	}
+	var value uint16
+	for _, b := range data {
+		value <<= 4
+		switch {
+		case b >= '0' && b <= '9':
+			value |= uint16(b - '0')
+		case b >= 'a' && b <= 'f':
+			value |= uint16(b-'a') + 10
+		case b >= 'A' && b <= 'F':
+			value |= uint16(b-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
+}
+
 func renderTemplate(value any, values map[string]any) (any, error) {
+	used := make(map[string]bool)
+	rendered, err := renderTemplateValue(value, values, used)
+	if err != nil {
+		return nil, err
+	}
+	for name := range values {
+		if !used[name] {
+			return nil, fmt.Errorf("unknown parameter %q", name)
+		}
+	}
+	return rendered, nil
+}
+
+func renderTemplateValue(value any, values map[string]any, used map[string]bool) (any, error) {
 	switch current := value.(type) {
 	case map[string]any:
 		if _, hasMarker := current["$xrayParam"]; hasMarker {
@@ -101,11 +182,17 @@ func renderTemplate(value any, values map[string]any) (any, error) {
 			if !found {
 				return nil, fmt.Errorf("missing required parameter %q", name)
 			}
+			used[name] = true
 			return replacement, nil
+		}
+		for key := range current {
+			if strings.HasPrefix(key, "$xray") {
+				return nil, errors.New("malformed parameter marker")
+			}
 		}
 		result := make(map[string]any, len(current))
 		for key, child := range current {
-			rendered, err := renderTemplate(child, values)
+			rendered, err := renderTemplateValue(child, values, used)
 			if err != nil {
 				return nil, err
 			}
@@ -115,7 +202,7 @@ func renderTemplate(value any, values map[string]any) (any, error) {
 	case []any:
 		result := make([]any, len(current))
 		for i, child := range current {
-			rendered, err := renderTemplate(child, values)
+			rendered, err := renderTemplateValue(child, values, used)
 			if err != nil {
 				return nil, err
 			}
