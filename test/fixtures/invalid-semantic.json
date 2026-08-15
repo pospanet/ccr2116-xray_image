@@ -1,0 +1,6 @@
+{
+  "inbounds": [
+    {"protocol": "not-a-real-protocol", "port": 18080}
+  ],
+  "outbounds": [{"protocol": "freedom"}]
+}

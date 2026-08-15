@@ -1,0 +1,11 @@
+{
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": {"$xrayParam": "example_port"},
+      "protocol": "dokodemo-door",
+      "settings": {"network": "tcp", "address": "example.invalid", "port": 443}
+    }
+  ],
+  "outbounds": [{"protocol": "freedom", "tag": "direct"}]
+}

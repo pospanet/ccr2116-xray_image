@@ -1,0 +1,27 @@
+.git
+.github
+.idea
+.vscode
+
+# Documentation and planning are not runtime build inputs.
+*.md
+examples
+testdata
+
+# Local material must never enter the build context. The committed root .env
+# may be used as build metadata in a later implementation.
+.env.*
+!.env
+*.key
+*.pem
+*.p12
+*.secret
+
+# Local build and test output
+bin
+dist
+coverage.out
+coverage.html
+*.test
+*.log
+*.tmp

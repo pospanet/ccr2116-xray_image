@@ -1,0 +1,27 @@
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Go and test output
+/bin/
+/dist/
+*.test
+coverage.out
+coverage.html
+
+# Local-only environment and secret files. The root .env is intentionally
+# committed because it contains build metadata only.
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+*.secret
+
+# Temporary files
+*.tmp
+*.log

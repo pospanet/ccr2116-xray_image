@@ -1,0 +1,58 @@
+name: release-xray
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+        with:
+          platforms: arm64
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Validate release metadata and tag
+        id: release
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+$ ]]
+          grep -qx 'XRAY_VERSION=26.7.28' .env
+          grep -qx 'IMAGE_NAME=pospa/xray-core' .env
+          grep -qx 'f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501  Xray-linux-arm64-v8a.zip' checksums/xray-v26.7.28-linux-arm64-v8a.sha256
+          echo "candidate=local/xray-release-candidate:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "target=pospa/xray-core:26.7.28-${GITHUB_REF_NAME#v}-arm64" >> "$GITHUB_OUTPUT"
+      - name: Build the release candidate once
+        run: docker buildx build --platform linux/arm64 --load --tag '${{ steps.release.outputs.candidate }}' --cache-from type=gha --cache-to type=gha,mode=max .
+      - name: Validate Go source
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src golang:1.24.6-alpine3.22@sha256:c8c5f95d64aa79b6547f3b626eb84b16a7ce18a139e3e9ca19a8c078b85ba80d sh -ec '
+            test -z "$(gofmt -l cmd)"
+            go vet ./...
+            go test ./...
+          '
+      - name: Test the exact release candidate
+        run: IMAGE='${{ steps.release.outputs.candidate }}' bash test/integration/run.sh
+      - name: Authenticate only after candidate tests pass
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Refuse overwrite and push the same tested image
+        run: |
+          set -euo pipefail
+          if docker manifest inspect '${{ steps.release.outputs.target }}' >/dev/null 2>&1; then
+            echo 'refusing to overwrite an existing immutable release tag' >&2
+            exit 1
+          fi
+          tested_id=$(docker image inspect -f '{{.Id}}' '${{ steps.release.outputs.candidate }}')
+          docker tag '${{ steps.release.outputs.candidate }}' '${{ steps.release.outputs.target }}'
+          test "$tested_id" = "$(docker image inspect -f '{{.Id}}' '${{ steps.release.outputs.target }}')"
+          docker push '${{ steps.release.outputs.target }}'
+          docker buildx imagetools inspect '${{ steps.release.outputs.target }}'
