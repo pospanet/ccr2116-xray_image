@@ -104,22 +104,41 @@ if test "$(docker image inspect -f '{{.Config.User}}' "$IMAGE")" != "65532:65532
 fi
 
 echo "check: generic image metadata"
-if test "$(docker image inspect -f '{{json .Config.Entrypoint}}' "$IMAGE")" != '["/usr/local/bin/xray-entry"]' ||
-   test "$(docker image inspect -f '{{json .Config.Cmd}}' "$IMAGE")" != '["run"]' ||
-   test "$(docker image inspect -f '{{json .Config.Env}}' "$IMAGE")" != 'null' ||
-   test "$(docker image inspect -f '{{json .Config.ExposedPorts}}' "$IMAGE")" != 'null' ||
-   test "$(docker image inspect -f '{{json .Config.Volumes}}' "$IMAGE")" != 'null' ||
-   test "$(docker image inspect -f '{{json .Config.Healthcheck}}' "$IMAGE")" != 'null' ||
-   test "$(docker image inspect -f '{{json .Config.Shell}}' "$IMAGE")" != 'null'; then
-  echo "failed: image metadata contains an unexpected runtime setting" >&2
+if ! command -v jq >/dev/null 2>&1; then
+  echo "failed: jq is required for image inspection" >&2
+  exit 1
+fi
+image_config=$(docker image inspect "$IMAGE" | jq -ce '.[0].Config')
+if ! jq -e '.Entrypoint == ["/usr/local/bin/xray-entry"]' <<<"$image_config" >/dev/null; then
+  echo "failed: image Entrypoint metadata is unexpected" >&2
+  exit 1
+fi
+if ! jq -e '.Cmd == ["run"]' <<<"$image_config" >/dev/null; then
+  echo "failed: image Cmd metadata is unexpected" >&2
+  exit 1
+fi
+# Docker/BuildKit may inject this conventional default PATH even for scratch.
+# No other environment metadata is permitted.
+if ! jq -e '.Env == null or .Env == [] or .Env == ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]' <<<"$image_config" >/dev/null; then
+  echo "failed: image Env metadata is unexpected" >&2
+  exit 1
+fi
+for metadata_field in ExposedPorts Volumes; do
+  if ! jq -e --arg field "$metadata_field" '.[$field] == null or .[$field] == {}' <<<"$image_config" >/dev/null; then
+    echo "failed: image $metadata_field metadata is not empty" >&2
+    exit 1
+  fi
+done
+if ! jq -e '.Healthcheck == null or .Healthcheck == {}' <<<"$image_config" >/dev/null; then
+  echo "failed: image Healthcheck metadata is not empty" >&2
+  exit 1
+fi
+if ! jq -e '.Shell == null or .Shell == []' <<<"$image_config" >/dev/null; then
+  echo "failed: image Shell metadata is not empty" >&2
   exit 1
 fi
 
 echo "check: exact final filesystem"
-if ! command -v jq >/dev/null 2>&1; then
-  echo "failed: jq is required for image-layer inspection" >&2
-  exit 1
-fi
 created=$(docker create --platform "$platform" "$IMAGE")
 trap 'docker rm -f "$created" >/dev/null 2>&1 || true' EXIT
 inspection=$(mktemp -d)
