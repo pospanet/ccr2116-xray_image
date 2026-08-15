@@ -11,3 +11,5 @@
   permissions, non-writable traversable runtime directories, allowlisted
   archive extraction, strict JSON/source handling, environment scrubbing, and
   fail-closed release publication checks.
+- Updates the fully pinned checkout action to the Node.js 24-based v7.0.1
+  release after direct verification of its official tag commit.
