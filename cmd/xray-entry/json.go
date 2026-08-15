@@ -77,7 +77,9 @@ func parseJSONValue(d *json.Decoder, depth int) (any, error) {
 		default:
 			return nil, errors.New("unexpected delimiter")
 		}
-	case string, bool, nil, json.Number:
+	case string, bool, nil:
+		return value, nil
+	case json.Number, float64:
 		return value, nil
 	default:
 		return nil, errors.New("unexpected JSON value")

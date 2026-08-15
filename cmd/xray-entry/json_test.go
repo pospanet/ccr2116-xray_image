@@ -19,6 +19,16 @@ func TestParseJSONRejectsAmbiguity(t *testing.T) {
 	}
 }
 
+func TestParseJSONAcceptsNumericValues(t *testing.T) {
+	config, err := parseJSON([]byte(`{"log":{"loglevel":"warning"},"inbounds":[{"port":18080}],"outbounds":[{"protocol":"freedom"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := config.(map[string]any)["inbounds"].([]any)[0].(map[string]any)["port"]; !ok || got != json.Number("18080") {
+		t.Fatalf("unexpected numeric value from parser: %#v", got)
+	}
+}
+
 func TestRenderTemplatePreservesTypes(t *testing.T) {
 	template, err := parseJSON([]byte(`{"port":{"$xrayParam":"listen_port"},"enabled":{"$xrayParam":"enabled"},"id":{"$xrayParam":"example_id"}}`))
 	if err != nil {
