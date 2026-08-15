@@ -7,7 +7,12 @@ fixtures="$root/test/fixtures"
 platform=linux/arm64
 
 expect_ok() { "$@"; }
-expect_fail() { if "$@"; then echo "expected command failure" >&2; exit 1; fi; }
+expect_fail() {
+  if "$@" >/dev/null 2>&1; then
+    echo "expected command failure" >&2
+    exit 1
+  fi
+}
 
 expect_ok docker run --rm --platform "$platform" -v "$fixtures/valid.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
 expect_ok docker run --rm --platform "$platform" -v "$fixtures/template.json:/template.json:ro" -v "$fixtures/template-values.json:/values.json:ro" "$IMAGE" test --mode template --template /template.json --values /values.json
@@ -22,10 +27,14 @@ expect_fail docker run --rm --platform "$platform" -v "$fixtures/template.json:/
 expect_ok docker run --rm --platform "$platform" -v "$fixtures/xhttp-stream-one.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
 
 # A running container proves run execs the validated stdin configuration without a named config path.
-cid=$(docker run -d --platform "$platform" -e "XRAY_CONFIG_BASE64=$encoded" "$IMAGE" run --mode env-base64)
+running_encoded=$(base64 -w0 "$fixtures/running.json")
+cid=$(docker run -d --platform "$platform" -e "XRAY_CONFIG_BASE64=$running_encoded" "$IMAGE" run --mode env-base64)
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 sleep 2
-test "$(docker inspect -f '{{.State.Running}}' "$cid")" = true
+if test "$(docker inspect -f '{{.State.Running}}' "$cid")" != true; then
+  echo "generated-configuration runtime did not remain running" >&2
+  exit 1
+fi
 docker rm -f "$cid" >/dev/null
 trap - EXIT
 
