@@ -95,7 +95,9 @@ for all modes, stdin lifecycle, valid/invalid config, missing template values,
 XHTTP `stream-one`, Xray version, identity, and final filesystem exclusions.
 Fixtures use only unmistakably non-production example values.
 
-CI validates on `push` and `pull_request` and never authenticates or publishes.
+CI validates on branch `push` events and `pull_request` events, and never
+authenticates or publishes. RC tags run only the RC publishing workflow; final
+release tags run only the final release workflow.
 The tag-only release workflow builds one candidate, tests that exact candidate,
 then and only then logs in and pushes its immutable version tag; it never uses
 or publishes `latest`, and it never rebuilds after testing. Final publication
