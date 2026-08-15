@@ -169,16 +169,30 @@ if test "${#layers[@]}" -eq 0; then
   echo "failed: saved image has no filesystem layers" >&2
   exit 1
 fi
+expected_directories=$(printf '%s\n' etc etc/ssl etc/ssl/certs tmp usr usr/local usr/local/bin usr/local/share usr/local/share/xray | sort)
+while IFS= read -r directory; do
+  mkdir -p "$inspection/image-rootfs/$directory"
+done <<<"$expected_directories"
+layer_listing="$inspection/layer-listing.txt"
+: >"$layer_listing"
 for layer in "${layers[@]}"; do
   if tar -tf "$inspection/image-archive/$layer" | grep -Eq '(^|/)\.wh\.'; then
     echo "failed: whiteout found in final scratch-image layers" >&2
     exit 1
   fi
-  if tar --numeric-owner -tvf "$inspection/image-archive/$layer" | awk '$2 != "0/0" { found=1 } END { exit found ? 0 : 1 }'; then
+  layer_metadata=$(tar --numeric-owner -tvf "$inspection/image-archive/$layer")
+  printf '%s\n' "$layer_metadata" >>"$layer_listing"
+  if printf '%s\n' "$layer_metadata" | awk '$2 != "0/0" { found=1 } END { exit found ? 0 : 1 }'; then
     echo "failed: non-root-owned entry found in final image layers" >&2
     exit 1
   fi
-  tar --no-same-owner -xf "$inspection/image-archive/$layer" -C "$inspection/image-rootfs"
+  if printf '%s\n' "$layer_metadata" | awk '$1 !~ /^[-d]/ { found=1 } END { exit found ? 0 : 1 }'; then
+    echo "failed: non-file, non-directory object found in final image layers" >&2
+    exit 1
+  fi
+  # Keep the disposable directory tree writable while applying later layers;
+  # authoritative modes are checked from the ordered layer listings below.
+  tar --no-same-owner --no-overwrite-dir -xf "$inspection/image-archive/$layer" -C "$inspection/image-rootfs"
 done
 layer_files=$(find "$inspection/image-rootfs" -type f -printf '%P\n' | sort)
 if test "$layer_files" != "$expected"; then
@@ -186,24 +200,20 @@ if test "$layer_files" != "$expected"; then
   diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$layer_files") >&2 || true
   exit 1
 fi
-expected_directories=$(printf '%s\n' etc etc/ssl etc/ssl/certs tmp usr usr/local usr/local/bin usr/local/share usr/local/share/xray | sort)
-layer_directories=$(find "$inspection/image-rootfs" -mindepth 1 -type d -printf '%P\n' | sort)
+layer_directories=$(awk '$1 ~ /^d/ { path=$NF; sub(/^\.\//, "", path); sub(/\/$/, "", path); if (path != "" && path != ".") print path }' "$layer_listing" | sort -u)
 if test "$layer_directories" != "$expected_directories"; then
   echo "failed: unexpected directory set in final image layers" >&2
   diff -u <(printf '%s\n' "$expected_directories") <(printf '%s\n' "$layer_directories") >&2 || true
   exit 1
 fi
-if find "$inspection/image-rootfs" -mindepth 1 ! -type f ! -type d -print -quit | grep -q .; then
-  echo "failed: non-file, non-directory object found in final image layers" >&2
-  exit 1
-fi
 while IFS= read -r directory; do
-  expected_mode=555
+  expected_metadata=dr-xr-xr-x:0/0
   if test "$directory" = tmp; then
-    expected_mode=1777
+    expected_metadata=drwxrwxrwt:0/0
   fi
-  if test "$(stat -c '%a' "$inspection/image-rootfs/$directory")" != "$expected_mode"; then
-    echo "failed: directory $directory does not have mode $expected_mode" >&2
+  directory_metadata=$(awk -v wanted="$directory" '$1 ~ /^d/ { path=$NF; sub(/^\.\//, "", path); sub(/\/$/, "", path); if (path == wanted) metadata=$1 ":" $2 } END { print metadata }' "$layer_listing")
+  if test "$directory_metadata" != "$expected_metadata"; then
+    echo "failed: directory $directory layer metadata is $directory_metadata, expected $expected_metadata" >&2
     exit 1
   fi
 done <<<"$layer_directories"
