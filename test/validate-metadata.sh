@@ -19,9 +19,9 @@ test "$(grep -Fc 'USER 65532:65532' Dockerfile)" -eq 1
 grep -Fq "test \"\$TARGETPLATFORM\" = \"linux/arm64\"" Dockerfile
 grep -Fq 'COPY --from=xray-verified --chmod=0555 /out/runtime-dirs/etc /etc' Dockerfile
 grep -Fq 'COPY --from=xray-verified --chmod=0555 /out/runtime-dirs/usr /usr' Dockerfile
-grep -Fq '&& chmod 1777 /out/tmp' Dockerfile
-grep -Fq 'COPY --from=xray-verified /out/tmp /tmp' Dockerfile
-if grep -Eq '^COPY .*--chmod=.* /out/tmp /tmp$' Dockerfile; then
+grep -Fq '&& chmod 1777 /out/runtime-tmp/tmp' Dockerfile
+grep -Fq 'COPY --from=xray-verified /out/runtime-tmp/ /' Dockerfile
+if grep -Eq '^COPY .*--chmod=.*runtime-tmp' Dockerfile; then
   echo 'Dockerfile overrides the verified sticky mode of /out/tmp' >&2
   exit 1
 fi

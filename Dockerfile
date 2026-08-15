@@ -13,13 +13,14 @@ FROM --platform=$BUILDPLATFORM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e96
 # BuildKit verifies the committed archive SHA-256 before this archive is extracted.
 ADD --checksum=sha256:f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501 https://github.com/XTLS/Xray-core/releases/download/v26.7.28/Xray-linux-arm64-v8a.zip /tmp/xray.zip
 COPY --from=entry-build /out/xray-extract /usr/local/bin/xray-extract
-RUN mkdir -p /out/usr/local/bin /out/usr/local/share/xray /out/tmp \
+RUN mkdir -p /out/usr/local/bin /out/usr/local/share/xray \
         /out/runtime-dirs/etc/ssl/certs \
         /out/runtime-dirs/usr/local/bin \
         /out/runtime-dirs/usr/local/share/xray \
+        /out/runtime-tmp/tmp \
     && /usr/local/bin/xray-extract /tmp/xray.zip /out/usr/local/share/xray \
     && mv /out/usr/local/share/xray/xray /out/usr/local/bin/xray \
-    && chmod 1777 /out/tmp
+    && chmod 1777 /out/runtime-tmp/tmp
 
 FROM scratch
 COPY --from=xray-verified --chmod=0555 /out/runtime-dirs/etc /etc
@@ -29,9 +30,9 @@ COPY --from=entry-build --chmod=0555 /out/xray-entry /usr/local/bin/xray-entry
 COPY --from=entry-build --chmod=0444 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=xray-verified --chmod=0444 /out/usr/local/share/xray/geoip.dat /usr/local/share/xray/geoip.dat
 COPY --from=xray-verified --chmod=0444 /out/usr/local/share/xray/geosite.dat /usr/local/share/xray/geosite.dat
-# Preserve the staging directory's sticky bit; COPY --chmod=1777 is observed
-# to normalize this to 0777 with the pinned BuildKit/frontend combination.
-COPY --from=xray-verified /out/tmp /tmp
+# COPY omits metadata of its source root, so /tmp is deliberately a child of
+# this staging root. Its 1777 mode is then recorded in the final layer.
+COPY --from=xray-verified /out/runtime-tmp/ /
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/xray-entry"]
 CMD ["run"]
