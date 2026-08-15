@@ -65,10 +65,13 @@ docker export -o "$inspection/rootfs.tar" "$created"
 mkdir "$inspection/rootfs"
 tar -xf "$inspection/rootfs.tar" -C "$inspection/rootfs"
 actual=$(find "$inspection/rootfs" -type f -printf '%P\n' | sort)
+# Docker injects these files when it creates a container; they are not image-layer files.
+runtime_injected='^(\.dockerenv|dev/console|etc/hostname|etc/hosts|etc/resolv\.conf)$'
+image_files=$(printf '%s\n' "$actual" | grep -Ev "$runtime_injected" || true)
 expected=$(printf '%s\n' etc/ssl/certs/ca-certificates.crt usr/local/bin/xray usr/local/bin/xray-entry usr/local/share/xray/geoip.dat usr/local/share/xray/geosite.dat | sort)
-if test "$actual" != "$expected"; then
+if test "$image_files" != "$expected"; then
   echo "failed: unexpected regular-file set in final image" >&2
-  diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") >&2 || true
+  diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$image_files") >&2 || true
   exit 1
 fi
 if test ! -d "$inspection/rootfs/tmp" || test "$(stat -c '%a' "$inspection/rootfs/tmp")" != 1777; then
