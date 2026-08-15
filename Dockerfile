@@ -29,7 +29,9 @@ COPY --from=entry-build --chmod=0555 /out/xray-entry /usr/local/bin/xray-entry
 COPY --from=entry-build --chmod=0444 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=xray-verified --chmod=0444 /out/usr/local/share/xray/geoip.dat /usr/local/share/xray/geoip.dat
 COPY --from=xray-verified --chmod=0444 /out/usr/local/share/xray/geosite.dat /usr/local/share/xray/geosite.dat
-COPY --from=xray-verified --chmod=1777 /out/tmp /tmp
+# Preserve the staging directory's sticky bit; COPY --chmod=1777 is observed
+# to normalize this to 0777 with the pinned BuildKit/frontend combination.
+COPY --from=xray-verified /out/tmp /tmp
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/xray-entry"]
 CMD ["run"]

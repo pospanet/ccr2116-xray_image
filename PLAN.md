@@ -112,8 +112,9 @@ made the final allowlist less explicit. The implementation now copies the CA
 bundle from the already digest-pinned Go builder, uses a repository-owned
 static `archive/zip` extractor that can emit only the three allowlisted
 upstream files, and copies every final file individually. The extractor exists
-only in a builder stage and performs no network access. `/tmp` is created by an
-explicit `COPY --chmod=1777`.
+only in a builder stage and performs no network access. `/tmp` is set to mode
+`1777` in the verifier stage and copied without a `--chmod` override so the
+sticky bit is preserved by the pinned builder.
 
 The same review pinned the CI Buildx and BuildKit versions, disabled runtime
 image provenance/SBOM manifests explicitly, removed test fixtures from the
