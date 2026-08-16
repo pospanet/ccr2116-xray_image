@@ -42,9 +42,20 @@ expect_ok "runtime identity can read GeoIP and geosite assets" docker run --rm -
 
 security_inspection=$(mktemp -d)
 trap 'rm -rf -- "$security_inspection"' EXIT
-cp "$fixtures/valid.json" "$security_inspection/group-writable.json"
-chmod 0666 "$security_inspection/group-writable.json"
-expect_fail "file mode rejects unsafe permissions" docker run --rm --platform "$platform" -v "$security_inspection/group-writable.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
+cp "$fixtures/valid.json" "$security_inspection/non-writable.json"
+chmod 0444 "$security_inspection/non-writable.json"
+expect_ok "file mode accepts a non-writable file on a read-write mount" docker run --rm --platform "$platform" -v "$security_inspection/non-writable.json:/config.json:rw" "$IMAGE" test --mode file --config /config.json
+cp "$fixtures/valid.json" "$security_inspection/non-runtime-owned.json"
+chmod 0644 "$security_inspection/non-runtime-owned.json"
+expect_ok "file mode uses runtime access instead of an unrelated owner-write bit" docker run --rm --platform "$platform" -v "$security_inspection/non-runtime-owned.json:/config.json:rw" "$IMAGE" test --mode file --config /config.json
+cp "$fixtures/valid.json" "$security_inspection/writable.json"
+chmod 0666 "$security_inspection/writable.json"
+expect_fail "file mode rejects an actually writable file" docker run --rm --platform "$platform" -v "$security_inspection/writable.json:/config.json:rw" "$IMAGE" test --mode file --config /config.json
+expect_ok "file mode accepts writable bits on a kernel read-only mount" docker run --rm --platform "$platform" -v "$security_inspection/writable.json:/config.json:ro" "$IMAGE" test --mode file --config /config.json
+if ! cmp -s "$fixtures/valid.json" "$security_inspection/writable.json"; then
+  echo "failed: file-mode writeability probes changed the source" >&2
+  exit 1
+fi
 canary=XRAY_ENTRY_CANARY_7f29c1e6
 canary_json=$(printf '{"inbounds":[{"protocol":"%s"}],"outbounds":[]}' "$canary")
 canary_encoded=$(printf '%s' "$canary_json" | base64 -w0)

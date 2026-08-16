@@ -1,14 +1,22 @@
-# Approved implementation plan: v0.1
+# Approved implementation plan: v0.1 architecture with v0.2 wrapper amendment
 
 ## Scope and release identity
 
 This plan is owner-approved for implementation on 2026-08-15. It creates one
 generic, shell-less OCI image for `linux/arm64`; it contains no deployment
 topology, endpoints, identities, credentials, or configuration. The first
-runtime release tag is `v0.1`, producing:
+planned runtime release tag was `v0.1`, producing:
 
 ```
 pospa/xray-core:26.7.28-0.1-arm64
+```
+
+The `0.1` hardware-acceptance RC was not approved for final release. The
+2026-08-16 amendment below advances only the wrapper release to `v0.2`, with
+unchanged Xray input and the intended image identity:
+
+```
+pospa/xray-core:26.7.28-0.2-arm64
 ```
 
 Implementation and local verification are authorized. The only approved
@@ -82,18 +90,28 @@ private `0600` file under `/tmp`; its descriptor remains open. Xray validates
 the exact descriptor contents with `xray run -format json -test` and then the
 same rewound descriptor becomes stdin for `syscall.Exec` of `xray run -format
 json`. This relies on the verified v26.7.28 `stdin:` fallback and does not use
-memfd, `/proc/self/fd`, or a remaining named config. File mode validates and
-then execs the mounted pathname. Operators must mount it read-only or otherwise
-keep it stable: a residual validation-to-exec TOCTOU risk is intentionally
-accepted for v0.1.
+memfd, `/proc/self/fd`, or a remaining named config as generated-config
+transport. File mode opens the source with `O_NOFOLLOW`, verifies
+`Lstat`/open/`fstat`/`SameFile` identity, rejects non-regular or oversize input,
+and asks the kernel to reopen the already opened file object with `O_WRONLY`
+only. A successful reopen proves runtime writeability and fails closed;
+`EACCES`, `EPERM`, or `EROFS` proves that attempt is kernel-blocked, while every
+other result fails as indeterminate. The probe has no create, truncate, append,
+or write flag. The same original read-only descriptor is parsed by the wrapper,
+semantically validated by Xray over stdin, rewound, and inherited as Xray's
+stdin after PID 1 exec, eliminating another lookup of the source pathname.
+`/proc/self/fd` is used only for the writeability probe against that open object.
 
 ## Verification and delivery
 
-Unit tests cover strict JSON parsing, typed rendering, invalid inputs and
-argument construction. Integration tests execute the actual final ARM64 image
-for all modes, stdin lifecycle, valid/invalid config, missing template values,
-XHTTP `stream-one`, Xray version, identity, and final filesystem exclusions.
-Fixtures use only unmistakably non-production example values.
+Unit tests cover strict JSON parsing, typed rendering, invalid inputs, source
+types and replacement, actual current-user writeability, fail-closed probe
+errors, probe non-modification, and argument construction. Integration tests
+execute the actual final ARM64 image for all modes, file-mode RW rejection and
+kernel read-only bind-mount acceptance, stdin lifecycle, valid/invalid config,
+missing template values, XHTTP `stream-one`, Xray version, identity, and final
+filesystem exclusions. Fixtures use only unmistakably non-production example
+values.
 
 CI validates on branch `push` events and `pull_request` events, and never
 authenticates or publishes. RC tags run only the RC publishing workflow; final
@@ -134,6 +152,49 @@ Adding `WRAPPER_RELEASE` to `.env` makes existing repository metadata the
 single machine-validated wrapper-version authority used by the RC workflow.
 Rollback consists of removing the RC workflow and this metadata field; any RC
 already published remains immutable and must not be overwritten or repurposed.
+
+### 2026-08-16 file-mode hardware finding and v0.2 decision
+
+The ARM64 `0.1` RC ran on a MikroTik L009 with RouterOS 7.23.3 and passed the
+runtime smoke test; `xray-entry version` exited with status 0. File-mode
+hardware acceptance then exposed a compatibility defect: RouterOS `mode=ro`
+bind mounts from USB ext4 remain kernel-enforced read-only inside the
+container, but preserve source Unix mode bits containing group/other write.
+The `0.1` wrapper interpreted those bits as the access decision and rejected
+the config before Xray started. RC `0.1` is therefore not approved for final
+release, and the final gate remains closed.
+
+Wrapper `0.2` replaces the bit-only decision with the fd-based kernel probe
+described in the `xray-entry` contract. It is filesystem- and platform-policy
+neutral: no RouterOS detection, hostname, environment variable, or mount-name
+bypass exists. An owner-, ACL-, group-, or other-writable source on an RW mount
+still fails because `O_WRONLY` succeeds. Wider mode bits on an RO mount pass
+only because the kernel returns `EROFS`. No new Go module or runtime dependency,
+capability, shell, package, or final-image file is introduced.
+
+The actual-image integration suite creates both RW and RO bind mounts of a
+mode-`0666` config, requiring RW rejection and RO acceptance. This exercises
+real kernel mount semantics on the Ubuntu CI Docker host without granting the
+production container `CAP_SYS_ADMIN`. Hardware acceptance must repeat the L009
+`version`, file-mode `test`, and run lifecycle on the real RouterOS `mode=ro`
+USB ext4 mount. A final release remains separately gated after those checks.
+
+#### Change/rollback consequence
+
+The security invariant changes from rejecting selected write permission bits
+to rejecting successful runtime write access. Rolling back to `0.1` would
+restore the RouterOS false positive and is not approved. If the fd-based probe
+cannot obtain a determinate kernel result (including unavailable procfs), file
+mode fails closed rather than falling back to mode bits. Published RC tags, if
+any, remain immutable and are never repurposed.
+
+The descriptor probe evaluates the exact mount/path attached to the opened
+file object. Operators must not expose the same inode to runtime user `65532`
+through a separate RW bind or hard-link alias, and must keep the backing inode
+stable while the wrapper reads, validates, and starts Xray. No descriptor-only
+check can enumerate every alias or prevent a privileged host process from
+modifying the inode in place. These are deployment-boundary residual risks,
+not reasons to fall back to permission bits.
 
 ### Change/rollback consequence
 

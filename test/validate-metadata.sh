@@ -8,7 +8,7 @@ grep -qx 'XRAY_UPSTREAM_COMMIT=5ca6f4b7d4dc20a881d4330e498892697627ec0c' .env
 grep -qx 'XRAY_ASSET_NAME=Xray-linux-arm64-v8a.zip' .env
 grep -qx 'XRAY_ASSET_SHA256=f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501' .env
 grep -qx 'IMAGE_NAME=pospa/xray-core' .env
-grep -qx 'WRAPPER_RELEASE=0.1' .env
+grep -qx 'WRAPPER_RELEASE=0.2' .env
 grep -qx 'PLATFORM=linux/arm64' .env
 grep -qx 'f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501  Xray-linux-arm64-v8a.zip' checksums/xray-v26.7.28-linux-arm64-v8a.sha256
 

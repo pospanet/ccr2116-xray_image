@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.2
+
+- Replaces the file-mode group/other permission-bit heuristic with a
+  kernel-enforced runtime writeability probe against the already opened file
+  object. An actually writable config, including an owner-writable config, is
+  still rejected; broader mode bits are accepted only when the runtime cannot
+  open that object for writing, including on a read-only mount.
+- Opens file-mode sources with `O_NOFOLLOW`, retains the
+  `Lstat`/open/`fstat`/`SameFile` identity checks, fails closed on an
+  indeterminate probe, and gives Xray the same read-only descriptor over stdin
+  for semantic validation and PID 1 execution.
+- Adds Linux regressions for owner and group/other writeability, read-only
+  files, symlinks, directories/devices/sockets/FIFOs, oversize input,
+  replacement races, probe side effects, and unexpected probe errors. The
+  actual-image suite now checks both a truly writable RW bind mount rejection
+  and writable mode bits on a kernel-enforced read-only bind mount acceptance.
+- Records that the `0.1` ARM64 RC passed the L009 / RouterOS 7.23.3 runtime
+  smoke test (`version` exited 0), but file-mode acceptance exposed RouterOS
+  read-only bind mounts preserving writable source mode bits. RC `0.1` is not
+  approved for final release; final publication remains gated on new `0.2`
+  hardware acceptance.
+
 ## v0.1
 
 - Initial generic `linux/arm64` scratch runtime for Xray `26.7.28`.

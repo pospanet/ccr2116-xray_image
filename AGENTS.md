@@ -12,24 +12,33 @@ continuing.
 - The owner approved immutable RouterOS hardware-acceptance RC publication only
   through `.github/workflows/release-candidate-xray.yaml` after all candidate
   validations pass. This does not authorize direct/manual publication.
+- The `0.1` RC passed the L009 / RouterOS 7.23.3 ARM64 runtime smoke test and
+  `version` exited 0, but file-mode hardware acceptance found the RouterOS
+  read-only-bind permission-bit incompatibility recorded in `PLAN.md`.
+- RC `0.1` is not approved for final release. The current wrapper release is
+  `0.2`, and final publication remains gated on new L009 hardware acceptance
+  plus a separate explicit final-release decision.
 - Do not directly push an image, log in to Docker Hub, create a Git tag or
   GitHub release/prerelease, modify secrets, or deploy without a separate
-  explicit instruction. Final `v0.1` publication remains separately gated.
+  explicit instruction. Final publication remains separately gated.
 
-## Approved v0.1 baseline
+## Approved v0.1 architecture and v0.2 wrapper baseline
 
 - Xray input is only official `XTLS/Xray-core` `v26.7.28`, commit
   `5ca6f4b7d4dc20a881d4330e498892697627ec0c`, asset
   `Xray-linux-arm64-v8a.zip`, SHA-256
   `f5698bb218ada3b4022db26fafc39601c5f53b46b19eb76c9616325985807501`.
-- The first image identity is `pospa/xray-core:26.7.28-0.1-arm64`; never use
-  `latest`. The initial platform is only `linux/arm64`.
+- The first planned image identity was `pospa/xray-core:26.7.28-0.1-arm64`;
+  the current intended identity is `pospa/xray-core:26.7.28-0.2-arm64`. Never
+  use `latest`. The initial platform is only `linux/arm64`.
 - The approved final filesystem is Xray, static `xray-entry`, CA bundle,
   verified release geodata, and writable `/tmp`; final stage is `scratch`.
 - `xray-entry` supports only `run`, `test`, `version`, and `uuid`. Configuration
   modes are explicit `file`, structural typed `template`, and `env-base64`.
 - Generated configuration uses the approved unlinked `/tmp` file and stdin
-  lifecycle; no memfd or `/proc/self/fd` design is permitted.
+  lifecycle; no memfd or `/proc/self/fd` transport is permitted. File mode may
+  use `/proc/self/fd` only for the reviewed writeability probe against an
+  already identity-verified open descriptor.
 
 ## Product boundary
 
@@ -60,6 +69,10 @@ continuing.
   direct process execution. The successful `run` path must exec Xray as PID 1.
 - Fail closed on ambiguity, missing inputs, malformed data, validation failure,
   unsafe file types, or permissions that cannot be made restrictive.
+- File mode must reject any source the current runtime process can open for
+  writing. Permission bits are only metadata: broader bits may pass only when
+  the kernel blocks `O_WRONLY` on the same open file object, such as `EROFS` on
+  a read-only mount. Unexpected probe results fail closed.
 - Treat environment variables as observable container metadata. Do not present
   them as the preferred secret mechanism.
 
@@ -90,6 +103,10 @@ continuing.
 - Reject duplicate JSON keys, trailing data, malformed placeholders, missing
   required parameters, type mismatches, and inputs over documented size/depth
   limits.
+- File sources must be opened without following symlinks and retain
+  `Lstat`/open/`fstat`/`SameFile` identity protection. The writeability probe,
+  wrapper JSON parse, Xray validation, and Xray run must refer to the same open
+  file object; the probe must not create, truncate, append, or write.
 - Rendered or decoded configuration must be held in a restrictive transient
   object and validated with the real pinned Xray binary before start.
 - Do not expose a configuration-dump operation if it can reveal credentials,

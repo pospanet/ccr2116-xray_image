@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -54,19 +53,30 @@ func run(args []string) error {
 		return err
 	}
 	if opts.mode == "file" {
-		if err := safeRegularFile(opts.config); err != nil {
+		config, err := openSource(opts.config)
+		if err != nil {
 			return fmt.Errorf("file mode config %q: %w", opts.config, err)
 		}
-		if _, err := readJSONFile(opts.config); err != nil {
+		defer config.Close()
+		if _, err := readJSONSource(config); err != nil {
 			return fmt.Errorf("file mode config %q: invalid JSON", opts.config)
 		}
-		if err := validatePath(opts.config); err != nil {
-			return err
+		if err := validateOpenSource(config); err != nil {
+			return fmt.Errorf("file mode config %q: %w", opts.config, err)
+		}
+		if err := validateConfig(config); err != nil {
+			return errors.New("file mode validation failed")
+		}
+		if err := validateOpenSource(config); err != nil {
+			return fmt.Errorf("file mode config %q: %w", opts.config, err)
 		}
 		if command == "test" {
 			return nil
 		}
-		return execXray([]string{defaultXray, "run", "-format", "json", "-config", opts.config})
+		if _, err := config.Seek(0, io.SeekStart); err != nil {
+			return errors.New("rewind file mode configuration")
+		}
+		return execXrayWithStdin(config, []string{defaultXray, "run", "-format", "json"})
 	}
 
 	data, err := generatedConfig(opts)
@@ -78,8 +88,8 @@ func run(args []string) error {
 		return err
 	}
 	defer f.Close()
-	if err := validateStdin(f); err != nil {
-		return err
+	if err := validateConfig(f); err != nil {
+		return errors.New("generated configuration validation failed")
 	}
 	if command == "test" {
 		return nil
@@ -158,24 +168,15 @@ func forward(command string) error {
 	return nil
 }
 
-func validatePath(path string) error {
-	c := exec.Command(defaultXray, "run", "-format", "json", "-test", "-config", path)
-	c.Env = xrayEnvironment()
-	if err := c.Run(); err != nil {
-		return errors.New("file mode validation failed")
-	}
-	return nil
-}
-
-func validateStdin(f *os.File) error {
+func validateConfig(f *os.File) error {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return errors.New("rewind generated configuration for validation")
+		return errors.New("rewind configuration for validation")
 	}
 	c := exec.Command(defaultXray, "run", "-format", "json", "-test")
 	c.Stdin = f
 	c.Env = xrayEnvironment()
 	if err := c.Run(); err != nil {
-		return errors.New("generated configuration validation failed")
+		return errors.New("configuration validation failed")
 	}
 	return nil
 }
@@ -240,26 +241,22 @@ func generatedConfig(o options) ([]byte, error) {
 }
 
 func readJSONFile(path string) (any, error) {
-	clean := filepath.Clean(path)
-	before, err := os.Lstat(clean)
+	f, err := openSource(path)
 	if err != nil {
-		return nil, errors.New("cannot inspect source")
-	}
-	if err := validateSourceInfo(before); err != nil {
 		return nil, err
-	}
-	f, err := os.Open(clean)
-	if err != nil {
-		return nil, errors.New("read failed")
 	}
 	defer f.Close()
-	after, err := f.Stat()
-	if err != nil || !os.SameFile(before, after) {
-		return nil, errors.New("source changed while opening")
-	}
-	if err := validateSourceInfo(after); err != nil {
+	value, err := readJSONSource(f)
+	if err != nil {
 		return nil, err
 	}
+	if err := validateOpenSource(f); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func readJSONSource(f *os.File) (any, error) {
 	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
 	if err != nil {
 		return nil, errors.New("read failed")
@@ -270,20 +267,9 @@ func readJSONFile(path string) (any, error) {
 	return parseJSON(b)
 }
 
-func safeRegularFile(path string) error {
-	info, err := os.Lstat(filepath.Clean(path))
-	if err != nil {
-		return errors.New("cannot inspect source")
-	}
-	return validateSourceInfo(info)
-}
-
 func validateSourceInfo(info os.FileInfo) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("source must be a regular file")
-	}
-	if info.Mode().Perm()&0o022 != 0 {
-		return errors.New("source must not be writable by group or others")
 	}
 	if info.Size() > maxConfigBytes {
 		return errors.New("source exceeds size limit")
