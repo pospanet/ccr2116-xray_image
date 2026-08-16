@@ -116,11 +116,12 @@ values.
 CI validates on branch `push` events and `pull_request` events, and never
 authenticates or publishes. RC tags run only the RC publishing workflow; final
 release tags run only the final release workflow.
-The tag-only release workflow builds one candidate, tests that exact candidate,
-then and only then logs in and pushes its immutable version tag; it never uses
-or publishes `latest`, and it never rebuilds after testing. Final publication
-remains gated on human review and RouterOS hardware acceptance; the RC path
-below exists to make that hardware acceptance possible first.
+The RC tag workflow builds one candidate, tests that exact candidate, then and
+only then logs in and pushes its immutable SHA-bearing RC tag. The final tag
+workflow never builds: after hardware acceptance it promotes the exact
+repository-bound RC manifest digest to the immutable final tag. Neither path
+uses a floating tag. Final publication remains gated on an explicit owner Git
+tag action and the RouterOS hardware acceptance described below.
 
 ### 2026-08-15 RouterOS hardware-acceptance RC decision
 
@@ -213,21 +214,42 @@ evidence is recorded in
 publication/promotion remains separately gated on explicit owner approval and
 has not occurred.
 
-For strongest release provenance, the preferred final-release design should
-promote/re-tag the already hardware-accepted RC image digest as
-`pospa/xray-core:26.7.28-0.2-arm64`, not perform an independent rebuild. The
-intended consequence is that the final artifact is byte-identical to the RC
-artifact tested by CI and accepted on RouterOS. This recommendation is not yet
-implemented in `release-xray.yaml`; workflow changes and final publication each
-require explicit implementation, review, and approval. Until then, no existing
-workflow behavior should be represented as digest promotion.
+### 2026-08-16 final-release promotion decision
+
+The approved final-release implementation promotes the already accepted RC
+manifest digest to `pospa/xray-core:26.7.28-0.2-arm64`; it never performs an
+independent build. [`release/final/v0.2.env`](release/final/v0.2.env) is the
+reviewable authority binding wrapper `0.2`, Xray `26.7.28`, `linux/arm64`,
+accepted source commit `ce1f39efaafc5fb11fdfb377e0b5b36546a03507`, RC tag
+`rc-v0.2-ce1f39efaafc`, hardware PASS evidence, and OCI manifest digest
+`sha256:a100a4b10ef8aefb658fa9f54359839f983fcab6dbd40431780e09e36bde0ba8`.
+The documentation/evidence commit after `ce1f39e` is intentionally not runtime
+provenance.
+
+Only a final Git tag exactly matching `v<major>.<minor>` and the binding's
+`WRAPPER_RELEASE` can trigger the promotion workflow. Before registry login it
+validates full Git/tag ancestry, unique metadata, exact hardware evidence, and
+Docker Hub all-tag immutability (`.*`). After login it resolves the RC tag to
+the committed digest, requires a single `linux/arm64` manifest, checks final-tag
+absence or same-digest idempotency, and uses digest-pinned `docker buildx
+imagetools create --prefer-index=false`. A different existing final digest is
+never overwritten. Post-promotion checks independently resolve both tags and
+require equality with the accepted digest. No GitHub Release or deployment is
+part of this workflow.
+
+The exact-manifest consequence is stronger than rebuilding equivalent source:
+the registry manifest identity tested in CI and on RouterOS is preserved. Final
+publication still occurs only when the owner explicitly creates and pushes the
+reviewed final Git tag; implementation alone publishes nothing.
 
 #### Change/rollback consequence
 
-This evidence update does not change the runtime, image inputs, wrapper release,
-or workflows. Removing the evidence would lose the audit trail but would not
-alter an artifact. If digest promotion is later implemented, rollback must use
-a previously tested immutable digest and must never repurpose an existing tag.
+This promotion design changes release automation and provenance metadata only;
+it does not change the runtime, Dockerfile, image inputs, wrapper release, or RC
+artifact. Rollback is removal or disabling of the final workflow before a final
+tag is pushed. Once a final tag exists, rollback means deploying a different,
+previously accepted immutable digest under its own version; neither RC nor final
+tags may be repurposed or overwritten.
 
 ### Change/rollback consequence
 

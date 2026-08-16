@@ -22,6 +22,12 @@
   passed, resolving the blocker found in RC `0.1`. Hardware acceptance is
   satisfied; final publication/promotion remains separately owner-gated. See
   [the detailed evidence](docs/HARDWARE-ACCEPTANCE.md).
+- Replaces the final-release rebuild path with an explicitly bound,
+  promotion-only workflow. Wrapper `0.2` is tied to the accepted source, RC
+  tag, hardware PASS record, and OCI manifest digest; the final workflow
+  requires Docker Hub tag immutability, promotes only the digest-pinned
+  `linux/arm64` manifest, refuses conflicting final tags, supports same-digest
+  idempotency, and verifies RC/final digest equality after promotion.
 
 ## v0.1
 

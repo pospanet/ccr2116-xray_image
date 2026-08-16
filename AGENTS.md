@@ -20,6 +20,11 @@ continuing.
 - The current wrapper release remains `0.2`. Hardware acceptance is satisfied,
   but final publication/promotion still requires explicit owner approval and
   has not occurred.
+- The final-release workflow is promotion-only. Its reviewed metadata binds
+  `v0.2` to source `ce1f39efaafc5fb11fdfb377e0b5b36546a03507`, RC tag
+  `rc-v0.2-ce1f39efaafc`, and accepted manifest digest
+  `sha256:a100a4b10ef8aefb658fa9f54359839f983fcab6dbd40431780e09e36bde0ba8`;
+  it must never rebuild from the later documentation commit or current HEAD.
 - Do not directly push an image, log in to Docker Hub, create a Git tag or
   GitHub release/prerelease, modify secrets, or deploy without a separate
   explicit instruction. Final publication remains separately gated.
@@ -129,8 +134,12 @@ continuing.
   `<IMAGE_NAME>:<XRAY_VERSION>-<release-without-v>-arm64`.
 - The RC image name is
   `<IMAGE_NAME>:<XRAY_VERSION>-<WRAPPER_RELEASE>-rc-<12hex>-arm64`.
-- Refuse to overwrite an existing release tag. Record the resulting manifest
-  digest and deploy a versioned, immutable reference.
+- Final publication must promote the repository-bound, hardware-accepted RC
+  manifest by digest; it must never run a Dockerfile or create an equivalent
+  rebuild. Require Docker Hub server-side all-tag immutability before login.
+- Refuse to overwrite an existing release tag with a different digest. Treat
+  an existing tag at the accepted digest as idempotent success, and verify the
+  RC tag and final tag both resolve to that digest after promotion.
 - RC tags are immutable: refuse overwrite and fail closed if registry existence
   cannot be determined. Build once, test the final image, retag the same image
   ID, push only that RC tag, and verify its digest and `linux/arm64` platform.
@@ -138,7 +147,8 @@ continuing.
   actual-final-image integration suite used for a release candidate succeeds.
 - RC publication is not a final release and must not create a GitHub release or
   prerelease, deploy, change secrets, publish another image, or promote a final
-  tag. Promotion is a later design decision after hardware acceptance.
+  tag. Only the separately owner-triggered final workflow may promote the
+  accepted RC after all provenance and hardware gates pass.
 - CI and release tests must inspect and execute the actual final image. A
   Dockerfile text check is not proof of runtime contents or identity.
 - Test all failure paths without logging fixtures that model secrets. Keep

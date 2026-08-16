@@ -67,8 +67,8 @@ upstream Xray. No floating tag, including `latest`, is built or published.
 
 See [DEVOPS.md](DEVOPS.md) for local validation commands. CI builds and tests a
 locally loaded ARM64 candidate on pushes and pull requests without registry
-authentication. The tag-only release workflow tests one candidate before it
-logs in and publishes that same image.
+authentication. The RC tag workflow tests one candidate before it logs in and
+publishes that same image. The final tag workflow does not build an image.
 
 RouterOS hardware acceptance may use only the dedicated immutable RC path. A
 tag `rc-v0.2-<first-12-commit-hex>` triggers the RC workflow, which verifies the
@@ -86,5 +86,16 @@ resolved. See [the hardware acceptance evidence](docs/HARDWARE-ACCEPTANCE.md)
 for the exact candidate, CI runs, hardware observations, and test results.
 
 **RC 0.2 hardware acceptance: PASS.** The hardware gate is satisfied, but final
-publication/promotion still requires explicit owner approval. No final release
-is represented by this repository state.
+publication/promotion still requires an explicit owner Git tag action. The
+reviewable binding in [`release/final/v0.2.env`](release/final/v0.2.env) fixes
+the accepted runtime source, RC tag, `linux/arm64` platform, PASS evidence, and
+OCI manifest digest. On `v0.2`, the final workflow validates that binding before
+credentials, requires Docker Hub server-side all-tag immutability, and promotes
+only the accepted digest-pinned RC manifest to
+`pospa/xray-core:26.7.28-0.2-arm64`. An existing different final digest fails;
+the same digest is an idempotent success. Both RC and final tags are resolved
+again after promotion and must equal the committed accepted digest.
+
+**FINAL RELEASE IS PROMOTION, NOT REBUILD.** This repository state implements
+that mechanism but does not represent a published final Git tag, Docker tag,
+GitHub Release, or deployment.

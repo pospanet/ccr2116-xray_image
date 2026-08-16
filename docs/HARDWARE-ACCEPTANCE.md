@@ -14,11 +14,14 @@ evidence, not a claim that the final release has been published.
 | Short source SHA | `ce1f39efaafc` |
 | RC Git tag | `rc-v0.2-ce1f39efaafc` |
 | RC image | `pospa/xray-core:26.7.28-0.2-rc-ce1f39efaafc-arm64` |
+| OCI manifest digest | `sha256:a100a4b10ef8aefb658fa9f54359839f983fcab6dbd40431780e09e36bde0ba8` |
 | RouterOS-reported image ID | `c6e4084e7cd5f26012ea5d2178e1120ce6245c4abef974c1d3beb0420ca476f8` |
 | Embedded Xray runtime | `Xray 26.7.28 (Xray, Penetrates Everything.) 5ca6f4b (go1.26.5 linux/arm64)` |
 
-The RouterOS-reported image ID is recorded exactly as observed. It is not
-substituted for, or represented as, an OCI registry manifest digest.
+The OCI manifest digest was resolved from the exact public Docker Hub RC tag
+on 2026-08-16. The RouterOS-reported image ID is recorded exactly as observed;
+it is a distinct image-config identity and is not substituted for, or
+represented as, the registry manifest digest.
 
 ### CI and immutable RC publication evidence
 
@@ -172,16 +175,18 @@ publication/promotion still requires explicit owner approval.**
 No final Git tag, final Docker tag, GitHub Release, deployment, or final image
 publication is established by this evidence record.
 
-### Final-release provenance recommendation
+### Final-release provenance binding
 
-The preferred final release mechanism is to promote/re-tag the already tested
-and hardware-accepted RC image digest as
-`pospa/xray-core:26.7.28-0.2-arm64`, rather than independently rebuilding a new
-final image. This keeps the final artifact byte-identical to the exact RC
-artifact that passed CI and RouterOS hardware acceptance.
+The reviewed final workflow is promotion-only. Repository metadata binds
+wrapper `0.2` to this exact source commit, RC Git tag, evidence record, and OCI
+manifest digest. The workflow must resolve the RC tag to
+`sha256:a100a4b10ef8aefb658fa9f54359839f983fcab6dbd40431780e09e36bde0ba8`
+and promote that digest-pinned registry object to
+`pospa/xray-core:26.7.28-0.2-arm64`. It cannot rebuild from this evidence commit
+or from another checkout.
 
-That mechanism is a release-engineering recommendation, not implemented
-workflow behavior or publication authorization. It requires explicit design,
-implementation, review, and owner approval before final release. In
-particular, this evidence does not authorize changing or running the current
-final-release workflow, publishing an image, or creating or pushing a tag.
+**FINAL RELEASE IS PROMOTION, NOT REBUILD.** This preserves the exact manifest
+identity accepted by CI and RouterOS, not merely equivalent source or files.
+Implementing and documenting the workflow does not itself authorize or record
+publication. The owner must separately create and push the exact final Git tag;
+no final tag, GitHub Release, or deployment is established by this record.

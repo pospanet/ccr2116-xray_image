@@ -44,6 +44,27 @@ if grep -Eq 'docker/login-action|docker (login|push)' .github/workflows/xray-ci.
   echo 'ordinary CI contains registry authentication or publication' >&2
   exit 1
 fi
+if grep -Eq 'docker[[:space:]]+(build([[:space:]]|$)|buildx[[:space:]]+build([[:space:]]|$))|setup-qemu-action' .github/workflows/release-xray.yaml; then
+  echo 'final release workflow contains a forbidden rebuild path' >&2
+  exit 1
+fi
+if grep -Eq 'docker[[:space:]]+(tag|push)([[:space:]]|$)' .github/workflows/release-xray.yaml; then
+  echo 'final release workflow contains a local retag/push path' >&2
+  exit 1
+fi
+test "$(grep -Fc 'docker buildx imagetools create' .github/workflows/release-xray.yaml)" -eq 2
+grep -Fq 'docker buildx imagetools create --dry-run --prefer-index=false' .github/workflows/release-xray.yaml
+grep -Fq 'docker buildx imagetools create --prefer-index=false' .github/workflows/release-xray.yaml
+grep -Fq 'source_reference="${IMAGE_NAME}@${accepted_digest}"' .github/workflows/release-xray.yaml
+grep -Fq 'inspect_reference "$RC_IMAGE" accepted-rc "$ACCEPTED_MANIFEST_DIGEST"' .github/workflows/release-xray.yaml
+grep -Fq 'bash test/validate-final-release.sh verify-post "$accepted_digest" "$post_rc_digest" "$post_final_digest"' .github/workflows/release-xray.yaml
+preauth_line=$(grep -nF 'name: Validate final tag and accepted RC provenance' .github/workflows/release-xray.yaml | cut -d: -f1)
+immutability_line=$(grep -nF 'name: Require Docker Hub server-side tag immutability' .github/workflows/release-xray.yaml | cut -d: -f1)
+login_line=$(grep -nF 'uses: docker/login-action@' .github/workflows/release-xray.yaml | cut -d: -f1)
+promotion_line=$(grep -nF 'name: Promote the exact accepted RC manifest without rebuilding' .github/workflows/release-xray.yaml | cut -d: -f1)
+test -n "$preauth_line" && test -n "$immutability_line" && test -n "$login_line" && test -n "$promotion_line"
+(( preauth_line < immutability_line && immutability_line < login_line && login_line < promotion_line ))
+test "$(grep -Fc 'uses: docker/login-action@' .github/workflows/release-xray.yaml)" -eq 1
 if grep -REqi '(^|[^[:alnum:]])latest([^[:alnum:]]|$)' .github/workflows; then
   echo 'workflow contains a forbidden latest tag reference' >&2
   exit 1

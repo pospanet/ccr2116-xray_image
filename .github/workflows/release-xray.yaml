@@ -18,56 +18,150 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
-        with:
-          platforms: arm64
-          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+      - name: Validate final tag and accepted RC provenance
+        id: release
+        shell: bash
+        run: bash test/validate-final-release.sh preauth "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA" "$GITHUB_OUTPUT"
+      - name: Require Docker Hub server-side tag immutability
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+        run: |
+          set -euo pipefail
+          command -v curl >/dev/null
+          command -v jq >/dev/null
+          namespace=${IMAGE_NAME%%/*}
+          repository=${IMAGE_NAME#*/}
+          [[ -n "$namespace" && -n "$repository" && "$namespace/$repository" == "$IMAGE_NAME" ]]
+          response=$(mktemp)
+          trap 'rm -f -- "$response"' EXIT
+          curl --fail --silent --show-error --proto '=https' \
+            "https://hub.docker.com/v2/namespaces/${namespace}/repositories/${repository}" \
+            > "$response"
+          jq -e --arg namespace "$namespace" --arg repository "$repository" '
+            .namespace == $namespace and .name == $repository
+          ' "$response" >/dev/null
+          enabled=$(jq -er '.immutable_tags_settings.enabled | tostring' "$response")
+          all_tag_rule_count=$(jq -er '[.immutable_tags_settings.rules[]? | select(. == ".*")] | length' "$response")
+          bash test/validate-final-release.sh validate-immutability "$enabled" "$all_tag_rule_count"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
         with:
           version: v0.34.1
           driver-opts: image=moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
-      - name: Validate release metadata and tag
-        id: release
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          bash test/validate-metadata.sh
-          echo "candidate=local/xray-release-candidate:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          echo "target=pospa/xray-core:26.7.28-${GITHUB_REF_NAME#v}-arm64" >> "$GITHUB_OUTPUT"
-      - name: Build the release candidate once
-        run: docker buildx build --platform linux/arm64 --provenance=false --sbom=false --load --tag '${{ steps.release.outputs.candidate }}' --cache-from type=gha --cache-to type=gha,mode=max .
-      - name: Validate Go source
-        run: |
-          docker run --rm -v "$PWD:/src:ro" -w /src golang:1.24.6-alpine3.22@sha256:c8c5f95d64aa79b6547f3b626eb84b16a7ce18a139e3e9ca19a8c078b85ba80d sh -ec '
-            test -z "$(gofmt -l cmd)"
-            go vet ./...
-            go test ./...
-          '
-      - name: Test the exact release candidate
-        run: IMAGE='${{ steps.release.outputs.candidate }}' bash test/integration/run.sh
-      - name: Authenticate only after candidate tests pass
+      - name: Authenticate only after all credential-free gates pass
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Refuse overwrite and push the same tested image
+      - name: Promote the exact accepted RC manifest without rebuilding
+        shell: bash
+        env:
+          ACCEPTED_RC_TAG: ${{ steps.release.outputs.accepted_rc_tag }}
+          ACCEPTED_MANIFEST_DIGEST: ${{ steps.release.outputs.accepted_manifest_digest }}
+          ACCEPTED_SOURCE_SHA: ${{ steps.release.outputs.accepted_source_sha }}
+          FINAL_IMAGE: ${{ steps.release.outputs.final_image }}
+          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+          RC_IMAGE: ${{ steps.release.outputs.rc_image }}
+          WRAPPER_RELEASE: ${{ steps.release.outputs.release }}
+          XRAY_VERSION: ${{ steps.release.outputs.xray_version }}
         run: |
           set -euo pipefail
-          inspect_error=$(mktemp)
-          trap 'rm -f -- "$inspect_error"' EXIT
-          if docker manifest inspect '${{ steps.release.outputs.target }}' >/dev/null 2>"$inspect_error"; then
-            echo 'refusing to overwrite an existing immutable release tag' >&2
+          command -v docker >/dev/null
+          command -v jq >/dev/null
+          docker buildx version >/dev/null
+
+          work_dir=$(mktemp -d)
+          trap 'rm -rf -- "$work_dir"' EXIT
+
+          inspect_reference() {
+            local reference=$1
+            local label=$2
+            local expected_digest=${3:-}
+            local manifest_file="$work_dir/${label}-manifest.json"
+            local image_file="$work_dir/${label}-image.json"
+            local digest media_type os arch
+
+            docker buildx imagetools inspect "$reference" --format '{{json .Manifest}}' > "$manifest_file"
+            docker buildx imagetools inspect "$reference" --format '{{json .Image}}' > "$image_file"
+            digest=$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' "$manifest_file")
+            media_type=$(jq -er '.mediaType | select(type == "string")' "$manifest_file")
+            os=$(jq -er '.os | select(type == "string")' "$image_file")
+            arch=$(jq -er '.architecture | select(type == "string")' "$image_file")
+            if [[ -n "$expected_digest" ]]; then
+              bash test/validate-final-release.sh validate-remote "$label" "$digest" "$media_type" "$os" "$arch" "$expected_digest"
+            else
+              bash test/validate-final-release.sh validate-remote "$label" "$digest" "$media_type" "$os" "$arch"
+            fi
+            printf '%s' "$digest"
+          }
+
+          if accepted_digest=$(inspect_reference "$RC_IMAGE" accepted-rc "$ACCEPTED_MANIFEST_DIGEST"); then
+            bash test/validate-final-release.sh require-rc-state present
+          else
+            bash test/validate-final-release.sh require-rc-state missing
+          fi
+          [[ "$accepted_digest" == "$ACCEPTED_MANIFEST_DIGEST" ]]
+
+          source_reference="${IMAGE_NAME}@${accepted_digest}"
+          pinned_digest=$(inspect_reference "$source_reference" accepted-digest "$accepted_digest")
+          [[ "$pinned_digest" == "$accepted_digest" ]]
+
+          final_error="$work_dir/final-inspect-error"
+          if final_digest=$(inspect_reference "$FINAL_IMAGE" final-image 2>"$final_error"); then
+            decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" present "$final_digest")
+          else
+            bash test/validate-final-release.sh missing-error "$FINAL_IMAGE" "$final_error"
+            decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" missing)
+          fi
+
+          current_rc_digest=$(inspect_reference "$RC_IMAGE" rc-before-promotion "$accepted_digest")
+          [[ "$current_rc_digest" == "$accepted_digest" ]]
+
+          if [[ "$decision" == promote ]]; then
+            docker buildx imagetools create --dry-run --prefer-index=false \
+              --tag "$FINAL_IMAGE" "$source_reference" >/dev/null
+
+            # Close the ordinary check/use window immediately before the only
+            # registry mutation. Docker Hub's required all-tag immutability is
+            # the server-side backstop against concurrent overwrites.
+            if final_digest=$(inspect_reference "$FINAL_IMAGE" final-recheck 2>"$final_error"); then
+              decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" present "$final_digest")
+            else
+              bash test/validate-final-release.sh missing-error "$FINAL_IMAGE" "$final_error"
+              decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" missing)
+            fi
+          fi
+
+          if [[ "$decision" == promote ]]; then
+            promotion_metadata="$work_dir/promotion-metadata.json"
+            docker buildx imagetools create --prefer-index=false \
+              --tag "$FINAL_IMAGE" \
+              --metadata-file "$promotion_metadata" \
+              "$source_reference"
+            promoted_digest=$(jq -er '
+              ."containerimage.descriptor".digest
+              | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))
+            ' "$promotion_metadata")
+            bash test/validate-final-release.sh validate-promotion "$accepted_digest" "$promoted_digest"
+          elif [[ "$decision" == idempotent ]]; then
+            echo 'final tag already resolves to the accepted digest; no registry mutation performed'
+          else
+            echo 'invalid promotion decision' >&2
             exit 1
           fi
-          if ! grep -Eqi 'manifest unknown|no such manifest|not found' "$inspect_error"; then
-            echo 'cannot safely determine whether the release tag already exists' >&2
-            exit 1
-          fi
-          rm -f -- "$inspect_error"
-          trap - EXIT
-          tested_id=$(docker image inspect -f '{{.Id}}' '${{ steps.release.outputs.candidate }}')
-          docker tag '${{ steps.release.outputs.candidate }}' '${{ steps.release.outputs.target }}'
-          test "$tested_id" = "$(docker image inspect -f '{{.Id}}' '${{ steps.release.outputs.target }}')"
-          docker push '${{ steps.release.outputs.target }}'
-          docker buildx imagetools inspect '${{ steps.release.outputs.target }}'
+
+          post_rc_digest=$(inspect_reference "$RC_IMAGE" rc-after-promotion "$accepted_digest")
+          post_final_digest=$(inspect_reference "$FINAL_IMAGE" final-after-promotion "$accepted_digest")
+          bash test/validate-final-release.sh verify-post "$accepted_digest" "$post_rc_digest" "$post_final_digest"
+
+          printf 'wrapper release: %s\n' "$WRAPPER_RELEASE"
+          printf 'Xray version: %s\n' "$XRAY_VERSION"
+          printf 'accepted source SHA: %s\n' "$ACCEPTED_SOURCE_SHA"
+          printf 'accepted RC Git tag: %s\n' "$ACCEPTED_RC_TAG"
+          printf 'accepted RC image: %s\n' "$RC_IMAGE"
+          printf 'accepted digest: %s\n' "$accepted_digest"
+          printf 'final image: %s\n' "$FINAL_IMAGE"
+          printf 'final digest: %s\n' "$post_final_digest"
+          echo 'RC/final digest equality: PASS'
