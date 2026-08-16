@@ -16,11 +16,12 @@
   replacement races, probe side effects, and unexpected probe errors. The
   actual-image suite now checks both a truly writable RW bind mount rejection
   and writable mode bits on a kernel-enforced read-only bind mount acceptance.
-- Records that the `0.1` ARM64 RC passed the L009 / RouterOS 7.23.3 runtime
-  smoke test (`version` exited 0), but file-mode acceptance exposed RouterOS
-  read-only bind mounts preserving writable source mode bits. RC `0.1` is not
-  approved for final release; final publication remains gated on new `0.2`
-  hardware acceptance.
+- Records the 2026-08-16 hardware acceptance of the immutable `0.2` RC on a
+  MikroTik L009 running RouterOS 7.23.3. Version, read-only file mode,
+  same-source read-write rejection, actual run lifecycle, and graceful stop all
+  passed, resolving the blocker found in RC `0.1`. Hardware acceptance is
+  satisfied; final publication/promotion remains separately owner-gated. See
+  [the detailed evidence](docs/HARDWARE-ACCEPTANCE.md).
 
 ## v0.1
 

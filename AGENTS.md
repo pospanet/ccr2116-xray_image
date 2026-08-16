@@ -12,12 +12,14 @@ continuing.
 - The owner approved immutable RouterOS hardware-acceptance RC publication only
   through `.github/workflows/release-candidate-xray.yaml` after all candidate
   validations pass. This does not authorize direct/manual publication.
-- The `0.1` RC passed the L009 / RouterOS 7.23.3 ARM64 runtime smoke test and
-  `version` exited 0, but file-mode hardware acceptance found the RouterOS
-  read-only-bind permission-bit incompatibility recorded in `PLAN.md`.
-- RC `0.1` is not approved for final release. The current wrapper release is
-  `0.2`, and final publication remains gated on new L009 hardware acceptance
-  plus a separate explicit final-release decision.
+- The `0.2` RC from commit `ce1f39efaafc5fb11fdfb377e0b5b36546a03507`
+  passed L009 / RouterOS 7.23.3 ARM64 hardware acceptance on 2026-08-16,
+  including RO file mode, RW rejection, run lifecycle, and graceful stop. The
+  `0.1` RouterOS blocker is resolved; detailed evidence is in
+  `docs/HARDWARE-ACCEPTANCE.md`.
+- The current wrapper release remains `0.2`. Hardware acceptance is satisfied,
+  but final publication/promotion still requires explicit owner approval and
+  has not occurred.
 - Do not directly push an image, log in to Docker Hub, create a Git tag or
   GitHub release/prerelease, modify secrets, or deploy without a separate
   explicit instruction. Final publication remains separately gated.

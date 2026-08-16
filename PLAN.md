@@ -196,6 +196,39 @@ check can enumerate every alias or prevent a privileged host process from
 modifying the inode in place. These are deployment-boundary residual risks,
 not reasons to fall back to permission bits.
 
+### 2026-08-16 RC 0.2 hardware acceptance result
+
+The immutable candidate
+`pospa/xray-core:26.7.28-0.2-rc-ce1f39efaafc-arm64` from source commit
+`ce1f39efaafc5fb11fdfb377e0b5b36546a03507` passed ordinary CI, the dedicated
+RC pipeline, and the MikroTik L009 / RouterOS 7.23.3 ARM64 hardware matrix.
+Hardware observations passed `version`, the formerly failing read-only
+file-mode regression, same-source read-write rejection, actual Xray execution
+through the validated descriptor/stdin lifecycle, and graceful stop. The
+RouterOS blocker found in RC `0.1` is resolved. The complete, authoritative
+evidence is recorded in
+[`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).
+
+**RC 0.2 hardware acceptance: PASS.** The hardware gate is satisfied. Final
+publication/promotion remains separately gated on explicit owner approval and
+has not occurred.
+
+For strongest release provenance, the preferred final-release design should
+promote/re-tag the already hardware-accepted RC image digest as
+`pospa/xray-core:26.7.28-0.2-arm64`, not perform an independent rebuild. The
+intended consequence is that the final artifact is byte-identical to the RC
+artifact tested by CI and accepted on RouterOS. This recommendation is not yet
+implemented in `release-xray.yaml`; workflow changes and final publication each
+require explicit implementation, review, and approval. Until then, no existing
+workflow behavior should be represented as digest promotion.
+
+#### Change/rollback consequence
+
+This evidence update does not change the runtime, image inputs, wrapper release,
+or workflows. Removing the evidence would lose the audit trail but would not
+alter an artifact. If digest promotion is later implemented, rollback must use
+a previously tested immutable digest and must never repurpose an existing tag.
+
 ### Change/rollback consequence
 
 Changing Xray, the archive hash, geodata, builder base digest, wrapper, or

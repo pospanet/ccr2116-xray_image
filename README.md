@@ -78,10 +78,13 @@ It publishes only
 actual-image suite passes, and refuses overwrite. This is not a final release,
 does not create a GitHub release/prerelease, and does not deploy the image.
 
-The historical `0.1` RC passed the ARM64 runtime smoke test on a MikroTik L009
-running RouterOS 7.23.3; `version` exited with status 0. File-mode hardware
-acceptance then found that a RouterOS `mode=ro` bind mount preserves writable
-Unix mode bits from its USB ext4 source, causing the old bit-only check to
-reject an effectively read-only config. RC `0.1` is therefore not approved for
-final release. Final publication remains closed until the new `0.2` candidate
-passes L009 hardware acceptance, including file mode on that read-only mount.
+RC `0.2` passed the actual-image CI suite and the complete MikroTik L009 /
+RouterOS 7.23.3 ARM64 hardware matrix on 2026-08-16. The matrix proved the
+read-only file-mode regression, same-source read-write rejection, actual run
+lifecycle, and graceful stop. The RouterOS blocker found in RC `0.1` is
+resolved. See [the hardware acceptance evidence](docs/HARDWARE-ACCEPTANCE.md)
+for the exact candidate, CI runs, hardware observations, and test results.
+
+**RC 0.2 hardware acceptance: PASS.** The hardware gate is satisfied, but final
+publication/promotion still requires explicit owner approval. No final release
+is represented by this repository state.

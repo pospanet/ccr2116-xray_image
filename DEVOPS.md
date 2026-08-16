@@ -51,26 +51,38 @@ tag, and publishes exactly one immutable RC tag. It creates no GitHub release
 or prerelease and performs no deployment.
 
 After publication, use the reported manifest digest for RouterOS acceptance.
-Do not repoint or overwrite the RC tag. Final promotion/release is intentionally
-undefined until hardware acceptance is complete and requires a separate owner
-decision. Never use `latest` or another floating tag.
+Do not repoint or overwrite the RC tag. Never use `latest` or another floating
+tag.
 
-Human final-release procedure remains separately gated: after RouterOS hardware
-acceptance and an explicit final-release decision, create the approved
-`v<major>.<minor>` Git tag and allow the final tag-triggered workflow to publish
-the immutable versioned tag.
+Human final-release procedure remains separately gated. Before creating a
+`v<major>.<minor>` Git tag or allowing the final tag-triggered workflow to run,
+the owner must explicitly approve the final-release mechanism and publication.
+The provenance recommendation below is the preferred design but is not yet
+implemented or authorized for execution.
 
 ### Current hardware gate
 
-The historical `0.1` RC passed the ARM64 runtime smoke test on L009 / RouterOS
-7.23.3, including `version` with exit status 0. File-mode acceptance then found
-that RouterOS keeps writable Unix mode bits visible on a USB ext4 config even
-when its container bind mount is `mode=ro`; the old bit-only policy rejected
-that effectively read-only file. RC `0.1` must not be promoted to final.
+The exact wrapper `0.2` candidate from commit
+`ce1f39efaafc5fb11fdfb377e0b5b36546a03507`, published under immutable RC tag
+`rc-v0.2-ce1f39efaafc`, passed the L009 / RouterOS 7.23.3 ARM64 hardware matrix
+on 2026-08-16. The test accepted the USB ext4 config through RouterOS
+`mode=ro`, rejected the same source through `mode=rw`, ran Xray through the
+validated descriptor/stdin lifecycle, and stopped cleanly. The `0.1` file-mode
+blocker is resolved. Exact CI and hardware observations are in
+[the hardware acceptance record](docs/HARDWARE-ACCEPTANCE.md).
 
-Wrapper `0.2` tests kernel-enforced runtime writeability instead. The automated
-actual-image suite must reject a mode-`0666` config on an RW bind mount and
-accept the same file on an RO bind mount. L009 acceptance must repeat `version`,
-file-mode `test`, and the real run lifecycle using the RouterOS `mode=ro` USB
-ext4 mount. Final release remains unauthorized until that acceptance succeeds
-and the owner makes a separate final-release decision.
+**RC 0.2 hardware acceptance: PASS.** Hardware acceptance is satisfied; final
+publication/promotion still requires explicit owner approval.
+
+### Final provenance recommendation
+
+The preferred final mechanism should promote/re-tag the already tested and
+hardware-accepted RC image digest as
+`pospa/xray-core:26.7.28-0.2-arm64`, rather than rebuild independently. The goal
+is a byte-identical final artifact with the exact RC artifact accepted by CI
+and RouterOS.
+
+This behavior is not implemented by the current `release-xray` workflow. It is
+a release-engineering recommendation that requires explicit implementation,
+review, and owner approval before final release. Do not publish, promote, or
+change the workflow on the strength of this recommendation alone.
