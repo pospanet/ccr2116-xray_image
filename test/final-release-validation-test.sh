@@ -34,7 +34,11 @@ expect_fail() {
 make_case() {
   local name=$1
   local target="$tmp_dir/$name"
-  git clone --quiet "$base_fixture" "$target"
+  if git clone --quiet "$base_fixture" "$target"; then
+    :
+  else
+    return 1
+  fi
   printf '%s' "$target"
 }
 
@@ -46,6 +50,7 @@ cp "$repo_root/Dockerfile" "$base_fixture/Dockerfile"
 cp "$repo_root/docs/HARDWARE-ACCEPTANCE.md" "$base_fixture/docs/HARDWARE-ACCEPTANCE.md"
 cp "$repo_root/test/validate-metadata.sh" "$base_fixture/test/validate-metadata.sh"
 cp "$repo_root/test/validate-final-release.sh" "$base_fixture/test/validate-final-release.sh"
+cp "$repo_root/test/final-release-workflow-helpers.sh" "$base_fixture/test/final-release-workflow-helpers.sh"
 cp "$repo_root/release/final/v0.2.env" "$base_fixture/release/final/v0.2.env"
 cp "$repo_root/.github/workflows/release-xray.yaml" "$base_fixture/.github/workflows/release-xray.yaml"
 git -C "$base_fixture" add .

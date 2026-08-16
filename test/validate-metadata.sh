@@ -56,6 +56,8 @@ test "$(grep -Fc 'docker buildx imagetools create' .github/workflows/release-xra
 grep -Fq 'docker buildx imagetools create --dry-run --prefer-index=false' .github/workflows/release-xray.yaml
 grep -Fq 'docker buildx imagetools create --prefer-index=false' .github/workflows/release-xray.yaml
 grep -Fq 'source_reference="${IMAGE_NAME}@${accepted_digest}"' .github/workflows/release-xray.yaml
+test -f test/final-release-workflow-helpers.sh
+grep -Fq 'source test/final-release-workflow-helpers.sh' .github/workflows/release-xray.yaml
 grep -Fq 'inspect_reference "$RC_IMAGE" accepted-rc "$ACCEPTED_MANIFEST_DIGEST"' .github/workflows/release-xray.yaml
 grep -Fq 'bash test/validate-final-release.sh verify-post "$accepted_digest" "$post_rc_digest" "$post_final_digest"' .github/workflows/release-xray.yaml
 preauth_line=$(grep -nF 'name: Validate final tag and accepted RC provenance' .github/workflows/release-xray.yaml | cut -d: -f1)

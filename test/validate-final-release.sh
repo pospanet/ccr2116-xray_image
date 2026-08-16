@@ -40,7 +40,11 @@ metadata_value() {
   local count value
   count=$(grep -c "^${key}=" "$file" || true)
   [[ $count -eq 1 ]] || die "$file must contain exactly one $key"
-  value=$(grep "^${key}=" "$file")
+  if value=$(grep "^${key}=" "$file"); then
+    :
+  else
+    die "failed to read $key from $file"
+  fi
   printf '%s' "${value#*=}"
 }
 

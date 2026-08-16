@@ -74,50 +74,77 @@ jobs:
 
           work_dir=$(mktemp -d)
           trap 'rm -rf -- "$work_dir"' EXIT
-
-          inspect_reference() {
-            local reference=$1
-            local label=$2
-            local expected_digest=${3:-}
-            local manifest_file="$work_dir/${label}-manifest.json"
-            local image_file="$work_dir/${label}-image.json"
-            local digest media_type os arch
-
-            docker buildx imagetools inspect "$reference" --format '{{json .Manifest}}' > "$manifest_file"
-            docker buildx imagetools inspect "$reference" --format '{{json .Image}}' > "$image_file"
-            digest=$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' "$manifest_file")
-            media_type=$(jq -er '.mediaType | select(type == "string")' "$manifest_file")
-            os=$(jq -er '.os | select(type == "string")' "$image_file")
-            arch=$(jq -er '.architecture | select(type == "string")' "$image_file")
-            if [[ -n "$expected_digest" ]]; then
-              bash test/validate-final-release.sh validate-remote "$label" "$digest" "$media_type" "$os" "$arch" "$expected_digest"
-            else
-              bash test/validate-final-release.sh validate-remote "$label" "$digest" "$media_type" "$os" "$arch"
-            fi
-            printf '%s' "$digest"
-          }
+          source test/final-release-workflow-helpers.sh
 
           if accepted_digest=$(inspect_reference "$RC_IMAGE" accepted-rc "$ACCEPTED_MANIFEST_DIGEST"); then
-            bash test/validate-final-release.sh require-rc-state present
+            accepted_status=0
           else
-            bash test/validate-final-release.sh require-rc-state missing
+            accepted_status=$?
           fi
-          [[ "$accepted_digest" == "$ACCEPTED_MANIFEST_DIGEST" ]]
+          if (( accepted_status != 0 )); then
+            if bash test/validate-final-release.sh require-rc-state missing; then
+              echo 'invalid accepted RC state validation result' >&2
+            fi
+            exit 1
+          fi
+          if bash test/validate-final-release.sh require-rc-state present; then
+            :
+          else
+            exit 1
+          fi
+          if [[ "$accepted_digest" != "$ACCEPTED_MANIFEST_DIGEST" ]]; then
+            echo 'accepted RC digest differs from accepted provenance' >&2
+            exit 1
+          fi
 
           source_reference="${IMAGE_NAME}@${accepted_digest}"
-          pinned_digest=$(inspect_reference "$source_reference" accepted-digest "$accepted_digest")
-          [[ "$pinned_digest" == "$accepted_digest" ]]
+          if pinned_digest=$(inspect_reference "$source_reference" accepted-digest "$accepted_digest"); then
+            :
+          else
+            exit 1
+          fi
+          if [[ "$pinned_digest" != "$accepted_digest" ]]; then
+            echo 'accepted digest reference changed unexpectedly' >&2
+            exit 1
+          fi
 
           final_error="$work_dir/final-inspect-error"
           if final_digest=$(inspect_reference "$FINAL_IMAGE" final-image 2>"$final_error"); then
-            decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" present "$final_digest")
+            final_status=0
           else
-            bash test/validate-final-release.sh missing-error "$FINAL_IMAGE" "$final_error"
-            decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" missing)
+            final_status=$?
+          fi
+          if (( final_status == 0 )); then
+            if decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" present "$final_digest"); then
+              :
+            else
+              exit 1
+            fi
+          elif (( final_status == INSPECT_REFERENCE_LOOKUP_FAILED )); then
+            if bash test/validate-final-release.sh missing-error "$FINAL_IMAGE" "$final_error"; then
+              :
+            else
+              exit 1
+            fi
+            if decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" missing); then
+              :
+            else
+              exit 1
+            fi
+          else
+            echo 'final image inspection failed after the registry lookup; state is indeterminate' >&2
+            exit 1
           fi
 
-          current_rc_digest=$(inspect_reference "$RC_IMAGE" rc-before-promotion "$accepted_digest")
-          [[ "$current_rc_digest" == "$accepted_digest" ]]
+          if current_rc_digest=$(inspect_reference "$RC_IMAGE" rc-before-promotion "$accepted_digest"); then
+            :
+          else
+            exit 1
+          fi
+          if [[ "$current_rc_digest" != "$accepted_digest" ]]; then
+            echo 'RC digest changed before promotion' >&2
+            exit 1
+          fi
 
           if [[ "$decision" == promote ]]; then
             docker buildx imagetools create --dry-run --prefer-index=false \
@@ -127,10 +154,30 @@ jobs:
             # registry mutation. Docker Hub's required all-tag immutability is
             # the server-side backstop against concurrent overwrites.
             if final_digest=$(inspect_reference "$FINAL_IMAGE" final-recheck 2>"$final_error"); then
-              decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" present "$final_digest")
+              final_status=0
             else
-              bash test/validate-final-release.sh missing-error "$FINAL_IMAGE" "$final_error"
-              decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" missing)
+              final_status=$?
+            fi
+            if (( final_status == 0 )); then
+              if decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" present "$final_digest"); then
+                :
+              else
+                exit 1
+              fi
+            elif (( final_status == INSPECT_REFERENCE_LOOKUP_FAILED )); then
+              if bash test/validate-final-release.sh missing-error "$FINAL_IMAGE" "$final_error"; then
+                :
+              else
+                exit 1
+              fi
+              if decision=$(bash test/validate-final-release.sh decide-final "$accepted_digest" missing); then
+                :
+              else
+                exit 1
+              fi
+            else
+              echo 'final image recheck failed after the registry lookup; state is indeterminate' >&2
+              exit 1
             fi
           fi
 
@@ -140,11 +187,19 @@ jobs:
               --tag "$FINAL_IMAGE" \
               --metadata-file "$promotion_metadata" \
               "$source_reference"
-            promoted_digest=$(jq -er '
+            if promoted_digest=$(jq -er '
               ."containerimage.descriptor".digest
               | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))
-            ' "$promotion_metadata")
-            bash test/validate-final-release.sh validate-promotion "$accepted_digest" "$promoted_digest"
+            ' "$promotion_metadata"); then
+              :
+            else
+              exit 1
+            fi
+            if bash test/validate-final-release.sh validate-promotion "$accepted_digest" "$promoted_digest"; then
+              :
+            else
+              exit 1
+            fi
           elif [[ "$decision" == idempotent ]]; then
             echo 'final tag already resolves to the accepted digest; no registry mutation performed'
           else
@@ -152,9 +207,21 @@ jobs:
             exit 1
           fi
 
-          post_rc_digest=$(inspect_reference "$RC_IMAGE" rc-after-promotion "$accepted_digest")
-          post_final_digest=$(inspect_reference "$FINAL_IMAGE" final-after-promotion "$accepted_digest")
-          bash test/validate-final-release.sh verify-post "$accepted_digest" "$post_rc_digest" "$post_final_digest"
+          if post_rc_digest=$(inspect_reference "$RC_IMAGE" rc-after-promotion "$accepted_digest"); then
+            :
+          else
+            exit 1
+          fi
+          if post_final_digest=$(inspect_reference "$FINAL_IMAGE" final-after-promotion "$accepted_digest"); then
+            :
+          else
+            exit 1
+          fi
+          if bash test/validate-final-release.sh verify-post "$accepted_digest" "$post_rc_digest" "$post_final_digest"; then
+            :
+          else
+            exit 1
+          fi
 
           printf 'wrapper release: %s\n' "$WRAPPER_RELEASE"
           printf 'Xray version: %s\n' "$XRAY_VERSION"

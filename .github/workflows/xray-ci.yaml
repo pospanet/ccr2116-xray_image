@@ -32,6 +32,7 @@ jobs:
           wrapper_release=$(awk -F= '$1 == "WRAPPER_RELEASE" { print $2 }' .env)
           bash test/validate-final-release.sh repository "v${wrapper_release}"
           bash test/final-release-validation-test.sh
+          bash test/final-release-workflow-test.sh
           docker run --rm -v "$PWD:/src:ro" -w /src golang:1.24.6-alpine3.22@sha256:c8c5f95d64aa79b6547f3b626eb84b16a7ce18a139e3e9ca19a8c078b85ba80d sh -ec '
             test -z "$(gofmt -l cmd)"
             go vet ./...
